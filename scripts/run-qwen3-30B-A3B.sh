@@ -41,7 +41,7 @@ ROLLOUT_ARGS=(
    --input-key prompt
    --label-key label
    --apply-chat-template
-   --apply-chat-template-kwargs "{enable_thinking: False}"
+   --apply-chat-template-kwargs "{'add_generation_prompt': True, 'enable_thinking': False}"
    --rollout-shuffle
    --rm-type deepscaler
    --num-rollout 3000
