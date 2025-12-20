@@ -41,12 +41,13 @@ ROLLOUT_ARGS=(
    --input-key prompt
    --label-key label
    --apply-chat-template
+   --apply-chat-template-kwargs "{enable_thinking: False}"
    --rollout-shuffle
    --rm-type deepscaler
    --num-rollout 3000
    --rollout-batch-size 32
    --n-samples-per-prompt 8
-   --rollout-max-response-len 16384
+   --rollout-max-response-len 8192
    --rollout-temperature 1
 
    --global-batch-size 256
