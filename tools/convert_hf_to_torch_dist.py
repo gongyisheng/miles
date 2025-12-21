@@ -1,6 +1,7 @@
 import gc
 import os
 import shutil
+import time
 
 import torch
 import torch.distributed as dist
@@ -80,6 +81,7 @@ def main():
         print("[ROCm] Applied FileSystemWriterAsync patch for HIP compatibility")
 
     configure_logger()
+    start_time = time.time()
 
     # Initialize distributed environment
     world_size = int(os.getenv("WORLD_SIZE") or os.getenv("SLURM_NTASKS") or 1)
@@ -125,6 +127,8 @@ def main():
         shutil.move(source_dir, target_dir)
     dist.barrier()
     dist.destroy_process_group()
+    end_time = time.time()
+    print(f"time cost: {end_time-start_time}")
 
 
 if __name__ == "__main__":
