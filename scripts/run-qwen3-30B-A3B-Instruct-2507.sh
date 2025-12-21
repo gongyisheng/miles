@@ -28,11 +28,11 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 source "${SCRIPT_DIR}/models/qwen3-30B-A3B-Instruct-2507.sh"
 
 CKPT_ARGS=(
-   --hf-checkpoint /root/qwen3-30b-A3B-Instruct-2507
-   #--hf-checkpoint /root/qwen3-30b-A3B-Instruct-2507-FP8
-   --ref-load /root/qwen3-30b-A3B-Instruct-2507_torch_dist
-   --load /root/qwen3-30b-A3B-Instruct-2507_miles/
-   --save /root/qwen3-30b-A3B-Instruct-2507_miles/
+   --hf-checkpoint /root/Qwen3-30b-A3B-Instruct-2507
+   #--hf-checkpoint /root/Qwen3-30b-A3B-Instruct-2507-FP8
+   --ref-load /root/Qwen3-30b-A3B-Instruct-2507_torch_dist
+   --load /root/Qwen3-30b-A3B-Instruct-2507_miles/
+   --save /root/Qwen3-30b-A3B-Instruct-2507_miles/
    --save-interval 20
 )
 
