@@ -3,6 +3,7 @@ import json
 import sys
 
 def send_request(url, payload):
+    print(f"send request to {url}")
     response = requests.post(
         url,
         json=payload
