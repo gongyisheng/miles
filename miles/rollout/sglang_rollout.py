@@ -155,6 +155,8 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
             sample.tokens = prompt_ids
 
     output = await post(url, payload)
+    print(f"[DEBUG] post payload: {payload}")
+    print(f"[DEBUG] post output: {output}")
 
     if args.use_miles_router and "RadixTreeMiddleware" in args.miles_router_middleware_paths:
         from miles.router.middleware_hub.radix_tree_middleware import postprocess_sample_with_radix_tree
@@ -187,7 +189,6 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         )
 
     sample.update_from_meta_info(args, output["meta_info"])
-    print(f"[DEBUG] return sample: {sample}")
 
     return sample
 
