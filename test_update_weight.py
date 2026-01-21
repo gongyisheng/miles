@@ -5,7 +5,6 @@ import sys
 def send_request(url, payload):
     response = requests.post(
         url,
-        headers={"Content-Type": "application/json"},
         json=payload
     )
 
