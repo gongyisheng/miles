@@ -17,7 +17,7 @@ def main():
     print("start")
 
     url="http://localhost:15000/release_memory_occupation"
-    payload=None
+    payload={}
     send_request(url, payload)
     print("request0")
 
