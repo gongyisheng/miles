@@ -14,7 +14,7 @@ def send_request(url, payload):
     return response.json()
 
 def main():
-
+    print("start")
 	url = "http://localhost:15000/resume_memory_occupation"
 	payload={'tags': ['weights']}
 	send_request(url, payload)
