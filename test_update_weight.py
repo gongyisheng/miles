@@ -6,14 +6,19 @@ def send_request(url, payload):
     print(f"send request to {url}")
     payload_hash = hashlib.md5(json.dumps(payload, sort_keys=True).encode()).hexdigest()
     print(f"[DEBUG] payload hash: {payload_hash}")
-    response = requests.post(
-        url,
-        json=payload
-    )
 
-    print(f"Status: {response.status_code}")
-    print(json.dumps(response.json(), indent=2))
-    return response.json()
+    try:
+        response = requests.post(
+            url,
+            json=payload
+        )
+
+        print(f"Status: {response.status_code}")
+        print(json.dumps(response.json(), indent=2))
+        return response.json()
+    except Exception as e:
+        print("error")
+        return {}
 
 def main():
     print("start")
