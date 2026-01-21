@@ -1,9 +1,11 @@
 import requests
 import json
-import sys
+import hashlib
 
 def send_request(url, payload):
     print(f"send request to {url}")
+    payload_hash = hashlib.md5(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+    print(f"[DEBUG] payload hash: {payload_hash}")
     response = requests.post(
         url,
         json=payload
