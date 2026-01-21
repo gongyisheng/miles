@@ -142,6 +142,8 @@ class RolloutManager:
             return
         self.health_monitoring_resume()
 
+        print(f"[DEBUG] eval args: {self.args}")
+        print(f"[DEBUG] eval rollout_id: {rollout_id}; data_source: {self.data_source}")
         result = call_rollout_fn(self.eval_generate_rollout, self.args, rollout_id, self.data_source, evaluation=True)
         data = result.data
         self._save_debug_rollout_data(data, rollout_id=rollout_id, evaluation=True)
