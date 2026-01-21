@@ -55,10 +55,12 @@ class GenerateState(metaclass=SingletonMeta):
             no_stop_trim=True,
             spaces_between_special_tokens=False,
         )
+        print(f"[DEBUG] sampling params: {self.sampling_params}")
 
         if getattr(args, "sglang_enable_deterministic_inference", False):
             sampling_seed_base = args.rollout_seed
             self.group_sampling_seeds = [sampling_seed_base + i for i in range(args.n_samples_per_prompt)]
+            print(f"[DEBUG] for deterministic inference, group sampling seeds are set")
 
         # dp rank balancing
         self.dp_counts = [0] * (args.sglang_dp_size or 1)
@@ -119,6 +121,7 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         } or None
     else:
         prompt_ids = state.tokenizer.encode(sample.prompt, add_special_tokens=False)
+    print(f"[DEBUG] prompt ids: {prompt_ids}")
 
     if len(sample.response) > 0:
         sampling_params["max_new_tokens"] -= len(sample.tokens) - len(prompt_ids)
@@ -184,6 +187,7 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         )
 
     sample.update_from_meta_info(args, output["meta_info"])
+    print(f"[DEBUG] return sample: {sample}")
 
     return sample
 
@@ -473,6 +477,7 @@ async def eval_rollout_single_dataset(
         no_stop_trim=True,
         spaces_between_special_tokens=False,
     )
+    print(f"[DEBUG] base sampling params: {base_sampling_params}")
 
     tasks = []
     # do multiple samples for eval prompts
