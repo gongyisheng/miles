@@ -15,6 +15,12 @@ def send_request(url, payload):
 
 def main():
     print("start")
+
+    url="http://localhost:15000/release_memory_occupation"
+    payload=None
+    send_request(url, payload)
+    print("request0")
+
     url = "http://localhost:15000/resume_memory_occupation"
     payload={'tags': ['weights']}
     send_request(url, payload)
