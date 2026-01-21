@@ -56,6 +56,7 @@ def launch_server_process(server_args: ServerArgs) -> multiprocessing.Process:
     multiprocessing.set_start_method("spawn", force=True)
     server_args.host = server_args.host.strip("[]")
     p = multiprocessing.Process(target=launch_server, args=(server_args,))
+    print(f"[DEBUG] sglang engine args: {server_args}")
     p.start()
 
     if server_args.node_rank != 0:
