@@ -159,7 +159,9 @@ async def postprocess_sample_with_radix_tree(args, sample: Sample, output: dict)
     assert not args.partial_rollout, "Currently partial rollout is not supported when using miles router"
     retrieve_url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}/retrieve_from_text"
     retrieve_payload = {"text": sample.prompt + output["text"], "return_logp": True}
+    print(f"[DEBUG] retrieve payload: {retrieve_payload}")
     retrieve_output = await post(retrieve_url, retrieve_payload)
+    print(f"[DEBUG] retrieve output: {retrieve_output}")
     sample.tokens = retrieve_output["tokens"]
     sample.response += output["text"]
     sample.loss_mask = retrieve_output["loss_mask"]
