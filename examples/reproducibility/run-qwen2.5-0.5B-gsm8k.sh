@@ -30,13 +30,13 @@ ROLLOUT_ARGS=(
    --apply-chat-template
    --rollout-shuffle
    --rm-type math
-   --num-rollout 100
-   --rollout-batch-size 32
+   --num-rollout 10
+   --rollout-batch-size 8
    --n-samples-per-prompt 8
    --rollout-max-response-len 1024
    --rollout-temperature 1
 
-   --global-batch-size 256
+   --global-batch-size 64
 )
 
 EVAL_ARGS=(
@@ -56,7 +56,7 @@ PERF_ARGS=(
    --expert-tensor-parallel-size 1
 
    --use-dynamic-batch-size
-   --max-tokens-per-gpu 9216
+   --max-tokens-per-gpu 4096
 )
 
 GRPO_ARGS=(
@@ -80,11 +80,11 @@ OPTIMIZER_ARGS=(
 )
 
 WANDB_ARGS=(
-   --use-wandb
-   --wandb-host https://wandb.ai/
-   --wandb-team glm-zero
-   --wandb-project miles-dev
-   --wandb-group qwen2.5-0.5B-gsm8k-deterministic
+   # --use-wandb
+   # --wandb-host https://wandb.ai/
+   # --wandb-team glm-zero
+   # --wandb-project miles-dev
+   # --wandb-group qwen2.5-0.5B-gsm8k-deterministic
 )
 
 SGLANG_ARGS=(
@@ -109,7 +109,7 @@ MISC_ARGS=(
 )
 
 # launch the master node of ray in container
-ray start --head --node-ip-address 127.0.0.1 --num-gpus 8 --disable-usage-stats
+ray start --head --node-ip-address 127.0.0.1 --num-gpus 1 --disable-usage-stats
 
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json='{
@@ -123,7 +123,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    }' \
    -- python3 train.py \
    --actor-num-nodes 1 \
-   --actor-num-gpus-per-node 8 \
+   --actor-num-gpus-per-node 1 \
    --colocate \
    --calculate-per-token-loss \
    --use-miles-router \
