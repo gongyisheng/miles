@@ -16,15 +16,18 @@ def train(args):
     # create the rollout manager, with sglang engines inside.
     # need to initialize rollout manager first to calculate num_rollout
     rollout_manager, num_rollout_per_epoch = create_rollout_manager(args, pgs["rollout"])
+    print("[DEBUG] rollout manager created")
 
     # create the actor and critic models
     actor_model, critic_model = create_training_models(args, pgs, rollout_manager)
+    print("[DEBUG] actor/critic model created")
 
     if args.offload_rollout:
         ray.get(rollout_manager.onload_weights.remote())
 
     # always update weight first so that sglang has the loaded weights from training.
     actor_model.update_weights()
+    print("[DEBUG] updated weights")
 
     if args.check_weight_update_equal:
         ray.get(rollout_manager.check_weights.remote(action="compare"))
