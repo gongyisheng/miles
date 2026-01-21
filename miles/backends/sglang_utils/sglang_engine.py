@@ -220,6 +220,11 @@ class SGLangEngine(RayActor):
         url = f"http://{self.server_host}:{self.server_port}/{endpoint}"
         response = requests.post(url, json=payload or {})
         print(f"[DEBUG] post request to sglang: url={url}, payload={payload}")
+        if payload is not None:
+            import hashlib
+            import json
+            payload_hash = hashlib.md5(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+            print(f"[DEBUG] payload hash: {payload_hash}")
         try:
             response.raise_for_status()
         except requests.exceptions.HTTPError as e:
