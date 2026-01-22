@@ -104,6 +104,10 @@ class MegatronTrainRayActor(TrainRayActor):
         )
         print(f"[DEBUG] Actor model initialized - model_name: {args.model_name}, hf_config type: {type(self.hf_config).__name__}")
 
+        # Log tensor hashes for loaded model params
+        for name, param in named_params_and_buffers(self.args, self.model):
+            print(f"[TENSOR_HASH] loaded model param - name: {name}, hash: {_tensor_hash(param)}, shape: {param.shape}")
+
         self.parallel_state = create_megatron_parallel_state(model=self.model)
 
         if role == "critic":
