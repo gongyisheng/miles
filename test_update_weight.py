@@ -11,7 +11,7 @@ uuids = ["3c0a80c3", "be6553d1"]
 
 def make_update_weight_from_tensor_payload(_uuid):
     f = f"{base_dir}/flattened_tensor_0_{_uuid}.pt"
-    tensor = torch.load(f, map_location='cpu', weights_only=True)
+    tensor = torch.load(f, map_location='cuda', weights_only=True)
     f = f"{base_dir}/metadata_0_{_uuid}.pkl"
     metadata = pickle.load(open(f, "rb"))
     print(f"metadata: {metadata}")
