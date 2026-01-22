@@ -75,6 +75,8 @@ class MegatronTrainRayActor(TrainRayActor):
         }
         dist.barrier(group=get_gloo_group())
 
+        print(f"[DEBUG] Actor init - role: {role}, hf_checkpoint: {args.hf_checkpoint}, load: {args.load}")
+
         if args.offload_train:
             if (x := args.train_memory_margin_bytes) > 0:
                 logger.info(f"Set torch_memory_saver.memory_margin_bytes to {x}")
@@ -92,6 +94,7 @@ class MegatronTrainRayActor(TrainRayActor):
         (self.model, self.optimizer, self.opt_param_scheduler, loaded_rollout_id) = initialize_model_and_optimizer(
             args, role
         )
+        print(f"[DEBUG] Actor model initialized - model_name: {args.model_name}, hf_config type: {type(self.hf_config).__name__}")
 
         self.parallel_state = create_megatron_parallel_state(model=self.model)
 
@@ -128,6 +131,7 @@ class MegatronTrainRayActor(TrainRayActor):
             self.args.vocab_size = self.tokenizer.vocab_size
 
         update_weight_cls = UpdateWeightFromTensor if self.args.colocate else UpdateWeightFromDistributed
+        print(f"[DEBUG] Creating weight_updater - cls: {update_weight_cls.__name__}, model_name: {type(self.hf_config).__name__.lower() if self.args.model_name is None else self.args.model_name}, colocate: {self.args.colocate}")
         self.weight_updater = update_weight_cls(
             self.args,
             self.model,
