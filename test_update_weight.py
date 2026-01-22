@@ -73,7 +73,12 @@ def main():
 
     url = "http://localhost:15000/update_weights_from_tensor"
     payload = make_update_weight_from_tensor_payload(uuids[1])
+    send_request(url, payload)
     print("request3")
+
+    url = "http://localhost:15000/resume_memory_occupation"
+    payload={'tags': ['kv_cache', 'cuda_graph']}
+    send_request(url, payload)
 
 if __name__ == "__main__":
     main()
