@@ -203,8 +203,10 @@ def _send_to_colocated_engine(
     for _dtype, named_tensors in converted_named_tensors_by_dtypes.items():
         flattened_tensor_bucket = FlattenedTensorBucket(named_tensors=named_tensors)
         metadata = flattened_tensor_bucket.get_metadata()
+        flattened_tensor = flattened_tensor_bucket.get_flattened_tensor()
+        print(f"[FLATTENED_TENSOR] type={type(flattened_tensor)}, shape={flattened_tensor.shape}, hash={_tensor_hash(flattened_tensor)}")
         flattened_tensor_data = {
-            "flattened_tensor": flattened_tensor_bucket.get_flattened_tensor(),
+            "flattened_tensor": flattened_tensor,
             "metadata": metadata,
         }
         long_live_tensors.append(flattened_tensor_data)
@@ -227,12 +229,18 @@ def _send_to_colocated_engine(
     if dist.get_rank() == ipc_gather_src:
         # TODO: here we assume all ranks have the same number of dtypes, not sure if that is correct.
         num_dtypes = len(serialized_named_tensors[0])
+        print(f"[IPC_GATHER] rank={dist.get_rank()}, num_dtypes={num_dtypes}, num_ranks={len(serialized_named_tensors)}")
         for i in range(num_dtypes):
+            serialized_list = [tensors[i] for tensors in serialized_named_tensors]
+            for rank_idx, serialized_data in enumerate(serialized_list):
+                data_hash = hashlib.sha256(serialized_data.encode() if isinstance(serialized_data, str) else serialized_data).hexdigest()
+                print(f"[IPC_GATHER] dtype_idx={i}, rank_idx={rank_idx}, serialized_len={len(serialized_data)}, hash={data_hash}")
             kwargs = {
-                "serialized_named_tensors": [tensors[i] for tensors in serialized_named_tensors],
+                "serialized_named_tensors": serialized_list,
                 "load_format": "flattened_bucket",
                 "weight_version": str(weight_version),
             }
+            print(f"[IPC_GATHER] calling update_weights_from_tensor with weight_version={weight_version}, num_tensors={len(serialized_list)}")
             refs.append(ipc_engine.update_weights_from_tensor.remote(**kwargs))
 
     return refs, long_live_tensors
