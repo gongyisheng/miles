@@ -6,7 +6,7 @@ import torch
 
 from sglang.srt.utils import MultiprocessingSerializer
 
-base_dir = ""
+base_dir = "/tmp"
 uuids = ["3c0a80c3", "be6553d1"]
 
 def make_update_weight_from_tensor_payload(_uuid):
