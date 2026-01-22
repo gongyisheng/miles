@@ -206,7 +206,11 @@ def _send_to_colocated_engine(
         flattened_tensor = flattened_tensor_bucket.get_flattened_tensor()
         print(f"[FLATTENED_TENSOR] type={type(flattened_tensor)}, shape={flattened_tensor.shape}, hash={_tensor_hash(flattened_tensor)}")
         import uuid
-        torch.save(flattened_tensor, f"/tmp/flattened_tensor_{dist.get_rank()}_{uuid.uuid4().hex[:8]}.pt")
+        import pickle
+        _uuid = uuid.uuid4().hex[:8]
+        torch.save(flattened_tensor, f"/tmp/flattened_tensor_{dist.get_rank()}_{_uuid}.pt")
+        with open(f"/tmp/metadata_{dist.get_rank()}_{_uuid}.pkl", "wb") as f:
+            pickle.dump(metadata, f)
         flattened_tensor_data = {
             "flattened_tensor": flattened_tensor,
             "metadata": metadata,
