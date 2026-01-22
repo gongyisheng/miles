@@ -9,9 +9,14 @@ from sglang.srt.utils import MultiprocessingSerializer
 base_dir = "/tmp"
 uuids = ["3c0a80c3", "be6553d1"]
 
+def _tensor_hash(t: torch.Tensor) -> str:
+    """Compute SHA256 hash of tensor data."""
+    return hashlib.sha256(t.detach().cpu().contiguous().view(torch.uint8).numpy()).hexdigest()
+
 def make_update_weight_from_tensor_payload(_uuid):
     f = f"{base_dir}/flattened_tensor_0_{_uuid}.pt"
     tensor = torch.load(f, map_location='cuda', weights_only=True)
+    print(f"tensor hash: {_tensor_hash(tensor)}")
     f = f"{base_dir}/metadata_0_{_uuid}.pkl"
     metadata = pickle.load(open(f, "rb"))
     print(f"metadata: {metadata}")
