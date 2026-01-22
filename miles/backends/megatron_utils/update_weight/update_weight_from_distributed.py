@@ -76,6 +76,7 @@ class UpdateWeightFromDistributed:
         Pause → flush → non-expert (TP) → expert (EP) → continue. Progress on PP source.
         """
         self.weight_version += 1
+        print(f"[DEBUG] UpdateWeightFromDistributed.update_weights - model_name: {self.model_name}, weight_version: {self.weight_version}")
 
         if dist.get_rank() == 0:
             ray.get([engine.pause_generation.remote() for engine in self.rollout_engines])
@@ -221,6 +222,10 @@ class UpdateWeightFromDistributed:
         """
         Lock → broadcast → clear → unlock → pbar++. Lock prevents NCCL deadlock.
         """
+        print(f"[DEBUG] Sending {len(converted_named_tensors)} tensors to sglang:")
+        for name, tensor in converted_named_tensors:
+            print(f"[DEBUG]   {name}: shape={tensor.shape}, dtype={tensor.dtype}")
+
         # lock the rollout engines to prevent dead lock on broadcast.
         while not ray.get(self.rollout_engine_lock.acquire.remote()):
             time.sleep(0.1)

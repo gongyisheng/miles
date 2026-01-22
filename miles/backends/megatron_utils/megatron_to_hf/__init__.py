@@ -18,9 +18,13 @@ def postprocess_hf_param(args, megatron_param_name, hf_param_name, param):
 
 # TODO optimize code details
 def convert_to_hf(args, model_name, name, param, quantization_config=None):
+    print(f"[DEBUG] convert_to_hf input - name: {name}, shape: {param.shape}, dtype: {param.dtype}")
     param = remove_padding(name, param, args.vocab_size)
 
     converted_named_tensors = _convert_to_hf_core(args, model_name, name, param)
+
+    for hf_name, hf_param in converted_named_tensors:
+        print(f"[DEBUG] convert_to_hf output - hf_name: {hf_name}, shape: {hf_param.shape}, dtype: {hf_param.dtype}")
 
     return quantize_params(args, name, converted_named_tensors, quantization_config)
 

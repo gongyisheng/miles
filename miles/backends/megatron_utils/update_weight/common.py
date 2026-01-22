@@ -17,11 +17,14 @@ def all_gather_param(name: str, param: torch.nn.Parameter) -> torch.Tensor:
     All-gather TP-sharded param to full tensor. expert_bias→param, non-TP/duplicated→param.data.
     Uses expert-TP for ".experts.", else regular-TP. linear_fc1 rechunked (GLU), linear_fc2 dim fix.
     """
+    print(f"[DEBUG] all_gather_param input - name: {name}, shape: {param.shape}, dtype: {param.dtype}")
     if "expert_bias" in name:
+        print(f"[DEBUG] all_gather_param output (expert_bias) - name: {name}, shape: {param.shape}")
         return param
 
     assert hasattr(param, "tensor_model_parallel"), f"{name} does not have tensor_model_parallel attribute"
     if not param.tensor_model_parallel or getattr(param, "parallel_mode", None) == "duplicated":
+        print(f"[DEBUG] all_gather_param output (non-TP/duplicated) - name: {name}, shape: {param.data.shape}")
         return param.data
 
     if ".experts." in name:
@@ -45,6 +48,7 @@ def all_gather_param(name: str, param: torch.nn.Parameter) -> torch.Tensor:
         if partition_dim == 0:
             partition_dim = 1
     param = torch.cat(param_partitions, dim=partition_dim)
+    print(f"[DEBUG] all_gather_param output (gathered) - name: {name}, shape: {param.shape}")
     return param
 
 
