@@ -1,3 +1,4 @@
+import hashlib
 from argparse import Namespace
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
@@ -5,6 +6,13 @@ from typing import Any
 import ray
 import torch
 import torch.distributed as dist
+
+
+def _tensor_hash(t: torch.Tensor) -> str:
+    """Compute SHA256 hash of tensor data."""
+    return hashlib.sha256(t.detach().cpu().contiguous().view(torch.uint8).numpy()).hexdigest()
+
+
 from megatron.core import mpu
 from ray import ObjectRef
 from ray.actor import ActorHandle
@@ -139,6 +147,11 @@ class UpdateWeightFromTensor:
         dist.barrier(group=get_gloo_group())
 
     def _send_hf_params(self, hf_named_tensors) -> tuple[list[ObjectRef], Any]:
+        print(f"[DEBUG] UpdateWeightFromTensor sending {len(hf_named_tensors)} tensors to sglang:")
+        for name, tensor in hf_named_tensors:
+            print(f"[DEBUG]   {name}: shape={tensor.shape}, dtype={tensor.dtype}")
+            print(f"[TENSOR_HASH] send to sglang (colocate) - name: {name}, hash: {_tensor_hash(tensor)}")
+
         all_refs = []
 
         refs_colocated, long_lived_tensors = _send_to_colocated_engine(
