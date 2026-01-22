@@ -19,7 +19,6 @@ def make_update_weight_from_tensor_payload(_uuid):
     print(f"tensor hash: {_tensor_hash(tensor)}")
     f = f"{base_dir}/metadata_0_{_uuid}.pkl"
     metadata = pickle.load(open(f, "rb"))
-    print(f"metadata: {metadata}")
     flattened_tensor_data = {
         "flattened_tensor": tensor,
         "metadata": metadata,
@@ -31,9 +30,9 @@ def make_update_weight_from_tensor_payload(_uuid):
     kwargs = {
         "serialized_named_tensors": serialized_tensors,
         "load_format": "flattened_bucket",
-        "weight_version": "1",
+        "flush_cache": False,
+        "weight_version": "1"
     }
-    print(kwargs)
     return kwargs
 
 def send_request(url, payload):
