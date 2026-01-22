@@ -205,6 +205,8 @@ def _send_to_colocated_engine(
         metadata = flattened_tensor_bucket.get_metadata()
         flattened_tensor = flattened_tensor_bucket.get_flattened_tensor()
         print(f"[FLATTENED_TENSOR] type={type(flattened_tensor)}, shape={flattened_tensor.shape}, hash={_tensor_hash(flattened_tensor)}")
+        import uuid
+        torch.save(flattened_tensor, f"/tmp/flattened_tensor_{dist.get_rank()}_{uuid.uuid4().hex[:8]}.pt")
         flattened_tensor_data = {
             "flattened_tensor": flattened_tensor,
             "metadata": metadata,
