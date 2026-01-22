@@ -21,11 +21,9 @@ def make_update_weight_from_tensor_payload(_uuid):
     serialized_tensors = []
     serialized_data = MultiprocessingSerializer.serialize(flattened_tensor_data, output_str=True)
     serialized_tensors.append(serialized_data)
-    print(serialized_tensors)
-    serialized_list = [tensors[0] for tensors in serialized_tensors]
 
     kwargs = {
-        "serialized_named_tensors": serialized_list,
+        "serialized_named_tensors": serialized_tensors,
         "load_format": "flattened_bucket",
         "weight_version": "1",
     }
