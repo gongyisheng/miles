@@ -190,6 +190,7 @@ def _send_to_colocated_engine(
 
     if getattr(FlattenedTensorBucket, "supports_multi_dtypes", False):
         converted_named_tensors_by_dtypes = {"dtype": hf_named_tensors}
+        print(f"[DEBUG] hf_named_tensors length: {len(hf_named_tensors)}")
     else:
         converted_named_tensors_by_dtypes = {}
         for name, tensor in hf_named_tensors:
