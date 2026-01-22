@@ -1,3 +1,4 @@
+import hashlib
 import socket
 import time
 from argparse import Namespace
@@ -6,6 +7,11 @@ from collections.abc import Callable, Mapping, Sequence
 import ray
 import torch
 import torch.distributed as dist
+
+
+def _tensor_hash(t: torch.Tensor) -> str:
+    """Compute SHA256 hash of tensor data."""
+    return hashlib.sha256(t.detach().cpu().contiguous().view(torch.uint8).numpy()).hexdigest()
 from megatron.core import mpu
 from ray import ObjectRef
 from ray.actor import ActorHandle
@@ -225,6 +231,7 @@ class UpdateWeightFromDistributed:
         print(f"[DEBUG] Sending {len(converted_named_tensors)} tensors to sglang:")
         for name, tensor in converted_named_tensors:
             print(f"[DEBUG]   {name}: shape={tensor.shape}, dtype={tensor.dtype}")
+            print(f"[TENSOR_HASH] send to sglang - name: {name}, hash: {_tensor_hash(tensor)}")
 
         # lock the rollout engines to prevent dead lock on broadcast.
         while not ray.get(self.rollout_engine_lock.acquire.remote()):

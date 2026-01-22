@@ -1,3 +1,4 @@
+import hashlib
 import logging
 import os
 import random
@@ -8,6 +9,13 @@ from contextlib import nullcontext
 import ray
 import torch
 import torch.distributed as dist
+
+
+def _tensor_hash(t: torch.Tensor) -> str:
+    """Compute SHA256 hash of tensor data."""
+    return hashlib.sha256(t.detach().cpu().contiguous().view(torch.uint8).numpy()).hexdigest()
+
+
 from megatron.core import mpu
 from ray.actor import ActorHandle
 from torch_memory_saver import torch_memory_saver
@@ -95,6 +103,10 @@ class MegatronTrainRayActor(TrainRayActor):
             args, role
         )
         print(f"[DEBUG] Actor model initialized - model_name: {args.model_name}, hf_config type: {type(self.hf_config).__name__}")
+
+        # Log tensor hashes for loaded model params
+        for name, param in named_params_and_buffers(self.args, self.model):
+            print(f"[TENSOR_HASH] loaded model param - name: {name}, hash: {_tensor_hash(param)}, shape: {param.shape}")
 
         self.parallel_state = create_megatron_parallel_state(model=self.model)
 
