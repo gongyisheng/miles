@@ -7,7 +7,7 @@ import torch
 from sglang.srt.utils import MultiprocessingSerializer
 
 base_dir = "/tmp"
-uuids = ["3c0a80c3", "be6553d1"]
+uuids = ["be6553d1", "3c0a80c3"]
 
 def make_update_weight_from_tensor_payload(_uuid):
     f = f"{base_dir}/flattened_tensor_0_{_uuid}.pt"
