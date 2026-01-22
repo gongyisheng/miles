@@ -14,6 +14,7 @@ def make_update_weight_from_tensor_payload(_uuid):
     tensor = torch.load(f, map_location='cpu', weights_only=True)
     f = f"{base_dir}/metadata_0_{_uuid}.pkl"
     metadata = pickle.load(open(f, "rb"))
+    print(f"metadata: {metadata}")
     flattened_tensor_data = {
         "flattened_tensor": tensor,
         "metadata": metadata,
