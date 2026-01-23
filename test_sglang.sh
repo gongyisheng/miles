@@ -1,0 +1,25 @@
+python -m sglang.launch_server \                                                                                                                                                       
+	--model-path /root/Qwen2.5-0.5B-Instruct/ \                                                                                                                                        
+	--tokenizer-path /root/Qwen2.5-0.5B-Instruct/ \                                                                                                                                    
+	--trust-remote-code \                                                                                                                                                              
+	--host 172.17.0.2 \                                                                                                                                                                
+	--port 15000 \                                                                                                                                                                     
+	--nccl-port 15001 \                                                                                                                                                                
+	--dist-init-addr 172.17.0.2:15002 \                                                                                                                                                
+	--skip-server-warmup \                                                                                                                                                             
+	--mem-fraction-static 0.7 \                                                                                                                                                        
+	--chunked-prefill-size 2048 \                                                                                                                                                      
+	--max-prefill-tokens 16384 \                                                                                                                                                       
+	--schedule-policy fcfs \                                                                                                                                                           
+	--random-seed 1234 \                                                                                                                                                               
+	--watchdog-timeout 300 \                                                                                                                                                           
+	--log-level info \                                                                                                                                                                 
+	--served-model-name /root/Qwen2.5-0.5B-Instruct/ \                                                                                                                                 
+	--attention-backend flashinfer \                                                                                                                                                   
+	--sampling-backend pytorch \                                                                                                                                                       
+	--grammar-backend xgrammar \                                                                                                                                                       
+	--disable-radix-cache \                                                                                                                                                            
+	--cuda-graph-max-bs 24 \                                                                                                                                                           
+	--cuda-graph-bs 1 2 4 8 12 16 24 \                                                                                                                                                 
+	--enable-memory-saver \                                                                                                                                                            
+	--enable-deterministic-inference 
