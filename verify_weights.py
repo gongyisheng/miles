@@ -1,234 +1,178 @@
 #!/usr/bin/env python3
 """
-Verify torch_dist checkpoint weights against original HuggingFace weights.
-This script compares key weights to identify potential corruption during conversion.
+Load DCP (Distributed Checkpoint) format and print tensor info.
+DCP stores each tensor in a directory with __0_0.distcp files.
 
-Usage: python verify_torch_dist_weights.py --hf-path /path/to/hf/model --torch-dist-path /path/to/torch_dist
+Usage: python load_dcp_checkpoint.py /path/to/torch_dist
 """
 
-import argparse
-import os
+import sys
+import pickle
 import torch
-from safetensors import safe_open
 from pathlib import Path
 
 
-def load_hf_weights(hf_path):
-    """Load weights from HuggingFace model."""
+def load_dcp_checkpoint(ckpt_path):
+    """Load all tensors from a DCP checkpoint."""
+    ckpt_path = Path(ckpt_path)
+
+    # Find the model directory
+    model_dir = ckpt_path / "release" / "model"
+    if not model_dir.exists():
+        model_dir = ckpt_path / "release"
+    if not model_dir.exists():
+        model_dir = ckpt_path
+
+    print(f"Loading from: {model_dir}")
+
+    # Check for .metadata file
+    metadata_file = model_dir / ".metadata"
+    if not metadata_file.exists():
+        print(f"ERROR: No .metadata file found in {model_dir}")
+        print("Directory contents:")
+        for item in sorted(model_dir.iterdir())[:20]:
+            print(f"  {item.name}")
+        return {}
+
+    # Load metadata
+    with open(metadata_file, "rb") as f:
+        metadata = pickle.load(f)
+
+    print(f"Metadata type: {type(metadata).__name__}")
+
     weights = {}
-    hf_path = Path(hf_path)
 
-    # Try safetensors first
-    safetensor_files = list(hf_path.glob("*.safetensors"))
-    if safetensor_files:
-        for sf_file in safetensor_files:
-            with safe_open(sf_file, framework="pt", device="cpu") as f:
-                for key in f.keys():
-                    weights[key] = f.get_tensor(key)
-    else:
-        # Fall back to pytorch bin files
-        bin_files = list(hf_path.glob("*.bin"))
-        for bin_file in bin_files:
-            state_dict = torch.load(bin_file, map_location="cpu")
-            weights.update(state_dict)
+    # Get the state dict metadata
+    if hasattr(metadata, "state_dict_metadata"):
+        sd_meta = metadata.state_dict_metadata
+        print(f"Found {len(sd_meta)} tensor entries in metadata\n")
 
-    print(f"Loaded {len(weights)} weights from HuggingFace model")
-    return weights
+        for key in sorted(sd_meta.keys()):
+            tensor_meta = sd_meta[key]
 
+            # Find the .distcp file for this tensor
+            # DCP stores tensors in directories named after the key
+            # with files like __0_0.distcp for rank 0
+            tensor_dir = model_dir / key
+            distcp_file = tensor_dir / "__0_0.distcp"
 
-def load_torch_dist_weights(torch_dist_path):
-    """Load weights from torch_dist checkpoint."""
-    weights = {}
-    torch_dist_path = Path(torch_dist_path)
+            if not distcp_file.exists():
+                # Some tensors might be stored differently
+                # Try direct file
+                distcp_file = model_dir / f"{key}/__0_0.distcp"
 
-    # Find the release checkpoint directory
-    release_dir = torch_dist_path / "release"
-    if not release_dir.exists():
-        # Try iter_* directories
-        iter_dirs = list(torch_dist_path.glob("iter_*"))
-        if iter_dirs:
-            release_dir = iter_dirs[0]
-        else:
-            raise FileNotFoundError(f"No checkpoint found in {torch_dist_path}")
-
-    # Find model state files
-    model_dir = release_dir / "model"
-    if model_dir.exists():
-        # torch_dist format with distcp
-        for distcp_file in model_dir.glob("**/*.distcp"):
-            state = torch.load(distcp_file, map_location="cpu")
-            if isinstance(state, dict):
-                weights.update(state)
-
-        # Also check for .pt files
-        for pt_file in model_dir.glob("**/*.pt"):
-            state = torch.load(pt_file, map_location="cpu")
-            if isinstance(state, dict):
-                weights.update(state)
-    else:
-        # Try loading model_optim_rng.pt directly
-        model_file = release_dir / "model_optim_rng.pt"
-        if model_file.exists():
-            state = torch.load(model_file, map_location="cpu")
-            if "model" in state:
-                weights = state["model"]
+            if distcp_file.exists():
+                try:
+                    tensor = torch.load(distcp_file, map_location="cpu", weights_only=False)
+                    weights[key] = tensor
+                    print(f"  {key}: {tensor.shape} {tensor.dtype}")
+                except Exception as e:
+                    print(f"  {key}: ERROR loading - {e}")
             else:
-                weights = state
+                # Check if it's stored as a single chunk
+                # or find any distcp file in the tensor dir
+                if tensor_dir.exists():
+                    distcp_files = list(tensor_dir.glob("*.distcp"))
+                    if distcp_files:
+                        try:
+                            tensor = torch.load(distcp_files[0], map_location="cpu", weights_only=False)
+                            weights[key] = tensor
+                            print(f"  {key}: {tensor.shape} {tensor.dtype}")
+                        except Exception as e:
+                            print(f"  {key}: ERROR loading - {e}")
+                    else:
+                        print(f"  {key}: No .distcp file found in {tensor_dir}")
+                else:
+                    print(f"  {key}: Directory not found")
 
-    print(f"Loaded {len(weights)} weights from torch_dist checkpoint")
     return weights
 
 
-def get_megatron_to_hf_mapping():
-    """Return mapping from Megatron weight names to HuggingFace names."""
-    # Direct mappings
-    direct = {
-        "embedding.word_embeddings.weight": "model.embed_tokens.weight",
-        "decoder.final_layernorm.weight": "model.norm.weight",
-        "output_layer.weight": "lm_head.weight",
-    }
-    return direct
+def compare_with_hf(weights, hf_path):
+    """Compare loaded weights with HuggingFace model."""
+    from safetensors import safe_open
 
+    hf_path = Path(hf_path)
+    hf_weights = {}
 
-def compare_weights(hf_weights, megatron_weights, args):
-    """Compare weights between HuggingFace and Megatron formats."""
+    # Load HF weights
+    for sf_file in hf_path.glob("*.safetensors"):
+        with safe_open(sf_file, framework="pt", device="cpu") as f:
+            for key in f.keys():
+                hf_weights[key] = f.get_tensor(key)
 
-    print("\n" + "="*60)
-    print("Weight Comparison Report")
-    print("="*60)
+    print(f"\nLoaded {len(hf_weights)} HF weights")
+    print(f"Loaded {len(weights)} Megatron weights\n")
 
-    # Check embedding weights
-    hf_embed_key = "model.embed_tokens.weight"
-    megatron_embed_keys = [k for k in megatron_weights.keys() if "embedding.word_embeddings.weight" in k]
+    # Compare embedding
+    if "model.embed_tokens.weight" in hf_weights:
+        hf_embed = hf_weights["model.embed_tokens.weight"]
 
-    if hf_embed_key in hf_weights and megatron_embed_keys:
-        hf_embed = hf_weights[hf_embed_key]
-        megatron_embed = megatron_weights[megatron_embed_keys[0]]
+        # Find megatron embedding
+        meg_embed_key = [k for k in weights.keys() if "embedding.word_embeddings.weight" in k]
+        if meg_embed_key:
+            meg_embed = weights[meg_embed_key[0]]
+            vocab_size = min(hf_embed.shape[0], meg_embed.shape[0])
 
-        # Handle potential vocab padding
-        vocab_size = min(hf_embed.shape[0], megatron_embed.shape[0])
-        hf_embed_trimmed = hf_embed[:vocab_size]
-        megatron_embed_trimmed = megatron_embed[:vocab_size]
+            diff = (hf_embed[:vocab_size] - meg_embed[:vocab_size]).abs()
+            print(f"Embedding comparison:")
+            print(f"  HF shape: {hf_embed.shape}, Megatron shape: {meg_embed.shape}")
+            print(f"  Max diff: {diff.max().item():.6e}, Mean diff: {diff.mean().item():.6e}")
+            if diff.max().item() < 1e-5:
+                print(f"  Status: OK")
+            else:
+                print(f"  Status: MISMATCH!")
 
-        diff = (hf_embed_trimmed - megatron_embed_trimmed).abs()
-        max_diff = diff.max().item()
-        mean_diff = diff.mean().item()
+    # Compare first layer QKV
+    q_key = "model.layers.0.self_attn.q_proj.weight"
+    if q_key in hf_weights:
+        hf_q = hf_weights[q_key]
+        hf_k = hf_weights["model.layers.0.self_attn.k_proj.weight"]
+        hf_v = hf_weights["model.layers.0.self_attn.v_proj.weight"]
 
-        print(f"\n[Embedding] {hf_embed_key}")
-        print(f"  HF shape: {hf_embed.shape}, Megatron shape: {megatron_embed.shape}")
-        print(f"  Max diff: {max_diff:.6e}, Mean diff: {mean_diff:.6e}")
-        print(f"  Status: {'OK' if max_diff < 1e-5 else 'MISMATCH!'}")
+        # Find megatron QKV (it's packed together)
+        qkv_key = [k for k in weights.keys() if "layers.0" in k and "linear_qkv.weight" in k]
+        if qkv_key:
+            meg_qkv = weights[qkv_key[0]]
+            print(f"\nQKV comparison (Layer 0):")
+            print(f"  HF Q: {hf_q.shape}, K: {hf_k.shape}, V: {hf_v.shape}")
+            print(f"  Megatron QKV: {meg_qkv.shape}")
 
-    # Check lm_head weights
-    hf_lmhead_key = "lm_head.weight"
-    megatron_lmhead_keys = [k for k in megatron_weights.keys() if "output_layer.weight" in k]
+            # For GQA, expected QKV dim = Q + K + V
+            expected_dim = hf_q.shape[0] + hf_k.shape[0] + hf_v.shape[0]
+            print(f"  Expected combined: {expected_dim}, Actual: {meg_qkv.shape[0]}")
 
-    if hf_lmhead_key in hf_weights and megatron_lmhead_keys:
-        hf_lmhead = hf_weights[hf_lmhead_key]
-        megatron_lmhead = megatron_weights[megatron_lmhead_keys[0]]
+            if meg_qkv.shape[0] == expected_dim:
+                # Try simple concatenation (Q, K, V order)
+                hf_qkv_simple = torch.cat([hf_q, hf_k, hf_v], dim=0)
+                diff_simple = (hf_qkv_simple - meg_qkv).abs()
 
-        vocab_size = min(hf_lmhead.shape[0], megatron_lmhead.shape[0])
-        hf_lmhead_trimmed = hf_lmhead[:vocab_size]
-        megatron_lmhead_trimmed = megatron_lmhead[:vocab_size]
+                print(f"  Testing [Q,K,V] order: max_diff={diff_simple.max().item():.6e}")
 
-        diff = (hf_lmhead_trimmed - megatron_lmhead_trimmed).abs()
-        max_diff = diff.max().item()
-        mean_diff = diff.mean().item()
+                if diff_simple.max().item() > 1e-5:
+                    # Try [Q,V,K] order (sometimes used)
+                    hf_qkv_alt = torch.cat([hf_q, hf_v, hf_k], dim=0)
+                    diff_alt = (hf_qkv_alt - meg_qkv).abs()
+                    print(f"  Testing [Q,V,K] order: max_diff={diff_alt.max().item():.6e}")
 
-        print(f"\n[LM Head] {hf_lmhead_key}")
-        print(f"  HF shape: {hf_lmhead.shape}, Megatron shape: {megatron_lmhead.shape}")
-        print(f"  Max diff: {max_diff:.6e}, Mean diff: {mean_diff:.6e}")
-        print(f"  Status: {'OK' if max_diff < 1e-5 else 'MISMATCH!'}")
-    elif hf_lmhead_key not in hf_weights:
-        print(f"\n[LM Head] Not in HF weights (tie_word_embeddings=True)")
-        # Check if Megatron has separate output_layer
-        if megatron_lmhead_keys:
-            print(f"  WARNING: Megatron has output_layer.weight but HF uses tied embeddings!")
-            print(f"  This could cause issues if the conversion didn't handle tied embeddings correctly.")
+                    # Check if it's interleaved
+                    # Megatron GQA format: [num_query_groups, q_per_group+1+1, head_dim, hidden]
+                    print(f"\n  Checking interleaved GQA format...")
+                    num_query_groups = hf_k.shape[0] // 64  # Assuming head_dim=64
+                    head_dim = 64
+                    q_per_group = hf_q.shape[0] // num_query_groups // head_dim
 
-    # Check a few layer weights
-    print("\n[Layer 0 QKV Weight Check]")
-
-    # Find QKV weights in Megatron format
-    qkv_keys = [k for k in megatron_weights.keys() if "layers.0" in k and "linear_qkv.weight" in k]
-    if qkv_keys:
-        megatron_qkv = megatron_weights[qkv_keys[0]]
-        print(f"  Megatron QKV shape: {megatron_qkv.shape}")
-
-        # Load separate Q, K, V from HF
-        q_key = "model.layers.0.self_attn.q_proj.weight"
-        k_key = "model.layers.0.self_attn.k_proj.weight"
-        v_key = "model.layers.0.self_attn.v_proj.weight"
-
-        if all(k in hf_weights for k in [q_key, k_key, v_key]):
-            hf_q = hf_weights[q_key]
-            hf_k = hf_weights[k_key]
-            hf_v = hf_weights[v_key]
-
-            print(f"  HF Q shape: {hf_q.shape}, K shape: {hf_k.shape}, V shape: {hf_v.shape}")
-
-            # For GQA: Q has more heads than K/V
-            # Megatron QKV is packed as [num_query_groups, (q_per_group + 1 + 1), head_dim, hidden]
-            num_q_heads = hf_q.shape[0] // (hf_q.shape[1] // (hf_weights.get("model.embed_tokens.weight", hf_q).shape[1] if "model.embed_tokens.weight" in hf_weights else hf_q.shape[1]))
-
-            # Try to reconstruct QKV from HF weights
-            expected_qkv_size = hf_q.shape[0] + hf_k.shape[0] + hf_v.shape[0]
-            print(f"  Expected combined QKV size: {expected_qkv_size} (Q:{hf_q.shape[0]} + K:{hf_k.shape[0]} + V:{hf_v.shape[0]})")
-            print(f"  Megatron QKV first dim: {megatron_qkv.shape[0]}")
-
-            if megatron_qkv.shape[0] != expected_qkv_size:
-                print(f"  WARNING: QKV dimension mismatch! This could indicate incorrect GQA handling.")
-
-    # Check MLP weights
-    print("\n[Layer 0 MLP Weight Check]")
-    gate_up_keys = [k for k in megatron_weights.keys() if "layers.0" in k and "linear_fc1.weight" in k]
-    if gate_up_keys:
-        megatron_fc1 = megatron_weights[gate_up_keys[0]]
-        print(f"  Megatron FC1 (gate+up) shape: {megatron_fc1.shape}")
-
-        hf_gate = hf_weights.get("model.layers.0.mlp.gate_proj.weight")
-        hf_up = hf_weights.get("model.layers.0.mlp.up_proj.weight")
-
-        if hf_gate is not None and hf_up is not None:
-            print(f"  HF gate shape: {hf_gate.shape}, up shape: {hf_up.shape}")
-
-            # Reconstruct and compare
-            hf_fc1 = torch.cat([hf_gate, hf_up], dim=0)
-            diff = (hf_fc1 - megatron_fc1).abs()
-            max_diff = diff.max().item()
-            mean_diff = diff.mean().item()
-
-            print(f"  Max diff: {max_diff:.6e}, Mean diff: {mean_diff:.6e}")
-            print(f"  Status: {'OK' if max_diff < 1e-5 else 'MISMATCH!'}")
-
-    # Print all available keys for debugging
-    print("\n" + "="*60)
-    print("Available Megatron weight keys (first 20):")
-    print("="*60)
-    for i, key in enumerate(sorted(megatron_weights.keys())[:20]):
-        print(f"  {key}: {megatron_weights[key].shape}")
-
-    print("\n" + "="*60)
-    print("Available HF weight keys (first 20):")
-    print("="*60)
-    for i, key in enumerate(sorted(hf_weights.keys())[:20]):
-        print(f"  {key}: {hf_weights[key].shape}")
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Verify torch_dist checkpoint against HF weights")
-    parser.add_argument("--hf-path", type=str, required=True, help="Path to HuggingFace model")
-    parser.add_argument("--torch-dist-path", type=str, required=True, help="Path to torch_dist checkpoint")
-    args = parser.parse_args()
-
-    print(f"Loading HuggingFace weights from: {args.hf_path}")
-    hf_weights = load_hf_weights(args.hf_path)
-
-    print(f"Loading torch_dist weights from: {args.torch_dist_path}")
-    megatron_weights = load_torch_dist_weights(args.torch_dist_path)
-
-    compare_weights(hf_weights, megatron_weights, args)
+                    print(f"  num_query_groups={num_query_groups}, q_per_group={q_per_group}, head_dim={head_dim}")
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) < 2:
+        print("Usage: python load_dcp_checkpoint.py <torch_dist_path> [hf_path]")
+        sys.exit(1)
+
+    ckpt_path = sys.argv[1]
+    weights = load_dcp_checkpoint(ckpt_path)
+
+    if len(sys.argv) >= 3:
+        hf_path = sys.argv[2]
+        compare_with_hf(weights, hf_path)
