@@ -1,3 +1,12 @@
+export SGL_JIT_DEEPGEMM_PRECOMPILE=false
+export SGLANG_JIT_DEEPGEMM_PRECOMPILE=false
+export SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK=true
+export SGLANG_DISABLE_TP_MEMORY_INBALANCE_CHECK=true
+export SGLANG_MEMORY_SAVER_CUDA_GRAPH=true
+export SGLANG_BATCH_INVARIANT_OPS_ENABLE_MM_FALLBACK_VARIANT=true
+export SGLANG_ENABLE_HEALTH_ENDPOINT_GENERATION=false
+export SGLANG_ENABLE_STRICT_MEM_CHECK_DURING_IDLE=false
+
 python -m sglang.launch_server \
 	--model-path /root/Qwen2.5-0.5B-Instruct/ \
 	--tokenizer-path /root/Qwen2.5-0.5B-Instruct/ \
