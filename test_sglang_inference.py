@@ -22,7 +22,7 @@ A restaurant has 40 tables with 4 legs and 50 tables with 3 legs. Calculate the 
     payload = {
         "input_ids": input_ids,
         "sampling_params": {
-            "temperature": 0.0,
+            "temperature": 1.0,
             "top_p": 1.0,
             "top_k": 1,
             "max_new_tokens": 512,
