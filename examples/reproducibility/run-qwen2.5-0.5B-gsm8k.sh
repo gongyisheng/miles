@@ -37,6 +37,9 @@ ROLLOUT_ARGS=(
    --rollout-temperature 1
 
    --global-batch-size 64
+
+   --rollout-external
+   --rollout-external-engine-addrs localhost:15000
 )
 
 EVAL_ARGS=(
