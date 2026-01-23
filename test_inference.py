@@ -7,6 +7,12 @@ import torch.distributed as dist
 os.environ.setdefault("CUDA_DEVICE_MAX_CONNECTIONS", "1")
 os.environ.setdefault("NVTE_FLASH_ATTN", "1")
 
+# Set distributed environment variables for single-GPU testing
+os.environ.setdefault("MASTER_ADDR", "localhost")
+os.environ.setdefault("MASTER_PORT", "29500")
+os.environ.setdefault("RANK", "0")
+os.environ.setdefault("WORLD_SIZE", "1")
+
 def initialize_megatron():
     """Initialize Megatron environment with minimal args."""
     from megatron.training.initialize import initialize_megatron
