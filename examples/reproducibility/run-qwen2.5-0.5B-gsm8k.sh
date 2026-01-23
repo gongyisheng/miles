@@ -94,7 +94,7 @@ SGLANG_ARGS=(
    --sglang-enable-deterministic-inference
    --sglang-attention-backend flashinfer
 
-   --deterministic-mode
+   # --deterministic-mode
 )
 
 MISC_ARGS=(
