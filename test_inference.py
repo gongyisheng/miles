@@ -27,7 +27,6 @@ def initialize_megatron():
         "--tokenizer-type", "HuggingFaceTokenizer",
         "--tokenizer-model", "/root/Qwen2.5-0.5B-Instruct/",  # Change this path
         "--load", "/root/Qwen2.5-0.5B-Instruct_torch_dist/",  # Change this path
-        "--hf-checkpoint", "/root/Qwen2.5-0.5B-Instruct/",  # Change this path
         "--bf16",
         "--use-rotary-position-embeddings",
         "--disable-bias-linear",
@@ -45,7 +44,6 @@ def initialize_megatron():
         "--no-load-optim",
         "--no-load-rng",
         "--untie-embeddings-and-output-weights",  # Try both with and without this
-        "--megatron-to-hf-mode", "bridge",
     ]
 
     initialize_megatron()
