@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """
-Load DCP (Distributed Checkpoint) format and print tensor info.
-DCP stores each tensor in a directory with __0_0.distcp files.
+Load Megatron DCP checkpoint and compare with HuggingFace weights.
 
-Usage: python load_dcp_checkpoint.py /path/to/torch_dist
+Usage: python load_dcp_checkpoint.py /path/to/torch_dist [/path/to/hf_model]
 """
 
 import sys
-import pickle
+import json
 import torch
 from pathlib import Path
 
@@ -16,74 +15,79 @@ def load_dcp_checkpoint(ckpt_path):
     """Load all tensors from a DCP checkpoint."""
     ckpt_path = Path(ckpt_path)
 
-    # Find the model directory
-    model_dir = ckpt_path / "release" / "model"
-    if not model_dir.exists():
-        model_dir = ckpt_path / "release"
-    if not model_dir.exists():
-        model_dir = ckpt_path
+    # Find the release directory
+    release_dir = ckpt_path / "release"
+    if not release_dir.exists():
+        release_dir = ckpt_path
 
-    print(f"Loading from: {model_dir}")
-
-    # Check for .metadata file
-    metadata_file = model_dir / ".metadata"
-    if not metadata_file.exists():
-        print(f"ERROR: No .metadata file found in {model_dir}")
-        print("Directory contents:")
-        for item in sorted(model_dir.iterdir())[:20]:
-            print(f"  {item.name}")
-        return {}
-
-    # Load metadata
-    with open(metadata_file, "rb") as f:
-        metadata = pickle.load(f)
-
-    print(f"Metadata type: {type(metadata).__name__}")
+    print(f"Loading from: {release_dir}")
+    print(f"Directory contents:")
+    for item in sorted(release_dir.iterdir()):
+        size = item.stat().st_size if item.is_file() else 0
+        print(f"  {item.name} ({size:,} bytes)")
 
     weights = {}
 
-    # Get the state dict metadata
-    if hasattr(metadata, "state_dict_metadata"):
-        sd_meta = metadata.state_dict_metadata
-        print(f"Found {len(sd_meta)} tensor entries in metadata\n")
+    # Load metadata.json to understand structure
+    metadata_file = release_dir / "metadata.json"
+    if metadata_file.exists():
+        with open(metadata_file, "r") as f:
+            metadata = json.load(f)
+        print(f"\nmetadata.json keys: {list(metadata.keys())}")
 
-        for key in sorted(sd_meta.keys()):
-            tensor_meta = sd_meta[key]
+    # Load common.pt to see what's there
+    common_file = release_dir / "common.pt"
+    if common_file.exists():
+        print(f"\nLoading common.pt...")
+        common_data = torch.load(common_file, map_location="cpu", weights_only=False)
+        print(f"common.pt type: {type(common_data)}")
+        if isinstance(common_data, dict):
+            print(f"common.pt keys: {list(common_data.keys())[:20]}")
 
-            # Find the .distcp file for this tensor
-            # DCP stores tensors in directories named after the key
-            # with files like __0_0.distcp for rank 0
-            tensor_dir = model_dir / key
-            distcp_file = tensor_dir / "__0_0.distcp"
+    # Load __0_0.distcp and __0_1.distcp
+    # These contain the actual model weights
+    distcp_files = sorted(release_dir.glob("__*.distcp"))
+    print(f"\nFound {len(distcp_files)} .distcp files")
 
-            if not distcp_file.exists():
-                # Some tensors might be stored differently
-                # Try direct file
-                distcp_file = model_dir / f"{key}/__0_0.distcp"
+    for distcp_file in distcp_files:
+        print(f"\nLoading {distcp_file.name}...")
+        try:
+            data = torch.load(distcp_file, map_location="cpu", weights_only=False)
+            print(f"  Type: {type(data)}")
 
-            if distcp_file.exists():
-                try:
-                    tensor = torch.load(distcp_file, map_location="cpu", weights_only=False)
-                    weights[key] = tensor
-                    print(f"  {key}: {tensor.shape} {tensor.dtype}")
-                except Exception as e:
-                    print(f"  {key}: ERROR loading - {e}")
-            else:
-                # Check if it's stored as a single chunk
-                # or find any distcp file in the tensor dir
-                if tensor_dir.exists():
-                    distcp_files = list(tensor_dir.glob("*.distcp"))
-                    if distcp_files:
-                        try:
-                            tensor = torch.load(distcp_files[0], map_location="cpu", weights_only=False)
-                            weights[key] = tensor
-                            print(f"  {key}: {tensor.shape} {tensor.dtype}")
-                        except Exception as e:
-                            print(f"  {key}: ERROR loading - {e}")
+            if isinstance(data, dict):
+                print(f"  Keys ({len(data)}):")
+                for key in sorted(data.keys())[:30]:
+                    val = data[key]
+                    if isinstance(val, torch.Tensor):
+                        print(f"    {key}: {val.shape} {val.dtype}")
                     else:
-                        print(f"  {key}: No .distcp file found in {tensor_dir}")
-                else:
-                    print(f"  {key}: Directory not found")
+                        print(f"    {key}: {type(val)}")
+                if len(data) > 30:
+                    print(f"    ... and {len(data) - 30} more")
+                weights.update(data)
+
+            elif isinstance(data, torch.Tensor):
+                print(f"  Tensor: {data.shape} {data.dtype}")
+                # Use filename as key
+                weights[distcp_file.stem] = data
+
+            else:
+                print(f"  Unknown format: {type(data)}")
+                # Try to iterate if possible
+                if hasattr(data, '__iter__'):
+                    for i, item in enumerate(data):
+                        if i < 5:
+                            print(f"    [{i}]: {type(item)}")
+
+        except Exception as e:
+            print(f"  Error loading: {e}")
+            import traceback
+            traceback.print_exc()
+
+    print(f"\n{'='*60}")
+    print(f"Total loaded: {len(weights)} weight entries")
+    print(f"{'='*60}")
 
     return weights
 
@@ -101,68 +105,62 @@ def compare_with_hf(weights, hf_path):
             for key in f.keys():
                 hf_weights[key] = f.get_tensor(key)
 
+    if not hf_weights:
+        # Try .bin files
+        for bin_file in hf_path.glob("*.bin"):
+            state = torch.load(bin_file, map_location="cpu")
+            hf_weights.update(state)
+
     print(f"\nLoaded {len(hf_weights)} HF weights")
     print(f"Loaded {len(weights)} Megatron weights\n")
 
-    # Compare embedding
-    if "model.embed_tokens.weight" in hf_weights:
-        hf_embed = hf_weights["model.embed_tokens.weight"]
+    if len(weights) == 0:
+        print("No Megatron weights loaded - cannot compare")
+        return
 
-        # Find megatron embedding
-        meg_embed_key = [k for k in weights.keys() if "embedding.word_embeddings.weight" in k]
-        if meg_embed_key:
-            meg_embed = weights[meg_embed_key[0]]
-            vocab_size = min(hf_embed.shape[0], meg_embed.shape[0])
+    # Show some HF keys for reference
+    print("HF weight keys (first 10):")
+    for key in sorted(hf_weights.keys())[:10]:
+        print(f"  {key}: {hf_weights[key].shape}")
 
-            diff = (hf_embed[:vocab_size] - meg_embed[:vocab_size]).abs()
-            print(f"Embedding comparison:")
-            print(f"  HF shape: {hf_embed.shape}, Megatron shape: {meg_embed.shape}")
-            print(f"  Max diff: {diff.max().item():.6e}, Mean diff: {diff.mean().item():.6e}")
-            if diff.max().item() < 1e-5:
-                print(f"  Status: OK")
-            else:
-                print(f"  Status: MISMATCH!")
+    print("\nMegatron weight keys (first 10):")
+    for key in sorted(weights.keys())[:10]:
+        val = weights[key]
+        if isinstance(val, torch.Tensor):
+            print(f"  {key}: {val.shape}")
+        else:
+            print(f"  {key}: {type(val)}")
 
-    # Compare first layer QKV
-    q_key = "model.layers.0.self_attn.q_proj.weight"
-    if q_key in hf_weights:
-        hf_q = hf_weights[q_key]
-        hf_k = hf_weights["model.layers.0.self_attn.k_proj.weight"]
-        hf_v = hf_weights["model.layers.0.self_attn.v_proj.weight"]
+    # Try to find and compare embedding
+    print("\n" + "="*60)
+    print("Weight Comparison")
+    print("="*60)
 
-        # Find megatron QKV (it's packed together)
-        qkv_key = [k for k in weights.keys() if "layers.0" in k and "linear_qkv.weight" in k]
-        if qkv_key:
-            meg_qkv = weights[qkv_key[0]]
-            print(f"\nQKV comparison (Layer 0):")
-            print(f"  HF Q: {hf_q.shape}, K: {hf_k.shape}, V: {hf_v.shape}")
-            print(f"  Megatron QKV: {meg_qkv.shape}")
+    # Find embedding in megatron weights
+    embed_keys = [k for k in weights.keys() if "embed" in k.lower() or "word_embedding" in k.lower()]
+    if embed_keys:
+        print(f"\nEmbedding keys found: {embed_keys}")
+        for ek in embed_keys:
+            if isinstance(weights[ek], torch.Tensor):
+                meg_embed = weights[ek]
+                hf_embed = hf_weights.get("model.embed_tokens.weight")
+                if hf_embed is not None:
+                    vocab_size = min(hf_embed.shape[0], meg_embed.shape[0])
+                    diff = (hf_embed[:vocab_size] - meg_embed[:vocab_size]).abs()
+                    print(f"  {ek}:")
+                    print(f"    HF shape: {hf_embed.shape}, Megatron shape: {meg_embed.shape}")
+                    print(f"    Max diff: {diff.max().item():.6e}, Mean diff: {diff.mean().item():.6e}")
+                    print(f"    Status: {'OK' if diff.max().item() < 1e-5 else 'MISMATCH!'}")
 
-            # For GQA, expected QKV dim = Q + K + V
-            expected_dim = hf_q.shape[0] + hf_k.shape[0] + hf_v.shape[0]
-            print(f"  Expected combined: {expected_dim}, Actual: {meg_qkv.shape[0]}")
+    # Find QKV in megatron weights
+    qkv_keys = [k for k in weights.keys() if "qkv" in k.lower() or "q_proj" in k.lower()]
+    if qkv_keys:
+        print(f"\nQKV keys found: {qkv_keys[:5]}")
 
-            if meg_qkv.shape[0] == expected_dim:
-                # Try simple concatenation (Q, K, V order)
-                hf_qkv_simple = torch.cat([hf_q, hf_k, hf_v], dim=0)
-                diff_simple = (hf_qkv_simple - meg_qkv).abs()
-
-                print(f"  Testing [Q,K,V] order: max_diff={diff_simple.max().item():.6e}")
-
-                if diff_simple.max().item() > 1e-5:
-                    # Try [Q,V,K] order (sometimes used)
-                    hf_qkv_alt = torch.cat([hf_q, hf_v, hf_k], dim=0)
-                    diff_alt = (hf_qkv_alt - meg_qkv).abs()
-                    print(f"  Testing [Q,V,K] order: max_diff={diff_alt.max().item():.6e}")
-
-                    # Check if it's interleaved
-                    # Megatron GQA format: [num_query_groups, q_per_group+1+1, head_dim, hidden]
-                    print(f"\n  Checking interleaved GQA format...")
-                    num_query_groups = hf_k.shape[0] // 64  # Assuming head_dim=64
-                    head_dim = 64
-                    q_per_group = hf_q.shape[0] // num_query_groups // head_dim
-
-                    print(f"  num_query_groups={num_query_groups}, q_per_group={q_per_group}, head_dim={head_dim}")
+    # Find layer norm
+    ln_keys = [k for k in weights.keys() if "layernorm" in k.lower() or "layer_norm" in k.lower() or "norm" in k.lower()]
+    if ln_keys:
+        print(f"\nLayerNorm keys found: {ln_keys[:5]}")
 
 
 if __name__ == "__main__":
