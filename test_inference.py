@@ -67,6 +67,11 @@ def load_model():
 
     args = get_args()
 
+    # Add miles-specific attributes needed by model_provider
+    args.megatron_to_hf_mode = "bridge"
+    args.hf_checkpoint = "/root/Qwen2.5-0.5B-Instruct/"
+    args.custom_model_provider_path = None
+
     # Get model
     model = get_model(get_model_provider_func(args, "actor"), ModelType.encoder_or_decoder)
 
