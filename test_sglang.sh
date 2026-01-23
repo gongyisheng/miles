@@ -2,10 +2,10 @@ python -m sglang.launch_server \
 	--model-path /root/Qwen2.5-0.5B-Instruct/ \
 	--tokenizer-path /root/Qwen2.5-0.5B-Instruct/ \
 	--trust-remote-code \
-	--host 172.17.0.2 \
+	--host localhost \
 	--port 15000 \
 	--nccl-port 15001 \
-	--dist-init-addr 172.17.0.2:15002 \
+	--dist-init-addr localhost:15002 \
 	--skip-server-warmup \
 	--mem-fraction-static 0.7 \
 	--chunked-prefill-size 2048 \
