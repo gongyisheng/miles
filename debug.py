@@ -313,8 +313,8 @@ def matmul_persistent(
 
     if _ENABLE_MM_FALLBACK_VARIANT:
         out = torch.einsum("ik,kj->ij", a, b)
-        if bias is not None:
-            out += bias
+        # if bias is not None:
+        #     out += bias
         return out
 
     return _matmul_persistent_triton(a=a, b=b, bias=bias)
