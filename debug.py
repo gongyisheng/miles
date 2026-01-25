@@ -2,6 +2,9 @@
 # Extracted from batch_invariant_ops.py (standalone, no sglang imports)
 
 import os
+
+# enable fallback variant for debugging
+os.environ["SGLANG_BATCH_INVARIANT_OPS_ENABLE_MM_FALLBACK_VARIANT"] = "1"
 from collections.abc import Callable
 from typing import Any, Dict
 
