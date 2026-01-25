@@ -4,7 +4,14 @@
 import os
 
 # enable fallback variant for debugging
-os.environ["SGLANG_BATCH_INVARIANT_OPS_ENABLE_MM_FALLBACK_VARIANT"] = "1"
+os.environ["SGL_JIT_DEEPGEMM_PRECOMPILE"] = "false"
+os.environ["SGLANG_JIT_DEEPGEMM_PRECOMPILE"] = "false"
+os.environ["SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK"] = "true"
+os.environ["SGLANG_DISABLE_TP_MEMORY_INBALANCE_CHECK"] = "true"
+os.environ["SGLANG_MEMORY_SAVER_CUDA_GRAPH"] = "true"
+os.environ["SGLANG_BATCH_INVARIANT_OPS_ENABLE_MM_FALLBACK_VARIANT"] = "true"
+os.environ["SGLANG_ENABLE_HEALTH_ENDPOINT_GENERATION"] = "false"
+os.environ["SGLANG_ENABLE_STRICT_MEM_CHECK_DURING_IDLE"] = "false"
 from collections.abc import Callable
 from typing import Any, Dict
 
