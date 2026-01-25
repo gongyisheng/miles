@@ -33,6 +33,7 @@ def _compute_enable_deep_gemm():
     # check SM version >= 90 (Hopper+)
     props = torch.cuda.get_device_properties(0)
     sm_version = props.major * 10 + props.minor
+    print(f"sm_version: {sm_version}")
     if sm_version < 90:
         return False
     try:
