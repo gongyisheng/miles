@@ -56,7 +56,7 @@ PERF_ARGS=(
    --expert-tensor-parallel-size 1
 
    --use-dynamic-batch-size
-   --max-tokens-per-gpu 4096
+   --max-tokens-per-gpu 1024
 )
 
 GRPO_ARGS=(
@@ -89,7 +89,7 @@ WANDB_ARGS=(
 
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 1
-   --sglang-mem-fraction-static 0.7
+   --sglang-mem-fraction-static 0.4
 
    --sglang-enable-deterministic-inference
    --sglang-attention-backend flashinfer
