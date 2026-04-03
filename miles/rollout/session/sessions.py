@@ -38,6 +38,24 @@ def setup_session_routes(app, backend, args):
 
     registry = SessionRegistry(args, tokenizer, tito_tokenizer=tito_tokenizer)
 
+    # --- DEBUG: track in-flight chat_completions ---
+    _inflight_chat = {"count": 0}
+
+    @app.middleware("http")
+    async def debug_request_logger(request: Request, call_next):
+        client = request.client
+        client_info = f"{client.host}:{client.port}" if client else "unknown"
+        logger.info(
+            f"[session-server] REQUEST ARRIVED: {request.method} {request.url.path} from={client_info} inflight_chat={_inflight_chat['count']}"
+        )
+        t0 = time.time()
+        response = await call_next(request)
+        elapsed = time.time() - t0
+        logger.info(
+            f"[session-server] REQUEST DONE: {request.method} {request.url.path} status={response.status_code} elapsed={elapsed:.3f}s from={client_info}"
+        )
+        return response
+
     @app.exception_handler(SessionError)
     async def session_error_handler(request: Request, exc: SessionError):
         return JSONResponse(status_code=exc.status_code, content={"error": str(exc)})
@@ -72,7 +90,11 @@ def setup_session_routes(app, backend, args):
         if session.closing:
             raise SessionNotFoundError(f"session not found: session_id={session_id}")
         session.closing = True
+        logger.debug(
+            f"[session-server] DELETE waiting for lock: session={session_id} lock_locked={session.lock.locked()}"
+        )
         await session.lock.acquire()
+        logger.debug(f"[session-server] DELETE acquired lock: session={session_id}")
         try:
             registry.remove_session(session_id)
         finally:
@@ -87,105 +109,109 @@ def setup_session_routes(app, backend, args):
         SGLang flags → proxy to backend → validate response → update
         trajectory checkpoint → append session record.
         """
-        session = registry.get_session(session_id)
-        if session.closing:
-            raise SessionNotFoundError(f"session not found: session_id={session_id}")
-        async with session.lock:
-            # Double-check: session may have been marked closing while waiting for lock.
+        _inflight_chat["count"] += 1
+        try:
+            session = registry.get_session(session_id)
             if session.closing:
                 raise SessionNotFoundError(f"session not found: session_id={session_id}")
+            async with session.lock:
+                # Double-check: session may have been marked closing while waiting for lock.
+                if session.closing:
+                    raise SessionNotFoundError(f"session not found: session_id={session_id}")
 
-            body = await request.body()
-            request_body = json.loads(body) if body else {}
+                body = await request.body()
+                request_body = json.loads(body) if body else {}
 
-            # TITO token tracking requires three SGLang flags working together:
-            #   logprobs=True            → populates meta_info.output_token_logprobs
-            #   return_prompt_token_ids  → adds choice.prompt_token_ids
-            #   return_meta_info         → wraps the above in choice.meta_info
-            # All three are hardcoded (not setdefault) to prevent agent-side
-            # overrides from breaking the token accumulation invariants.
-            request_body["logprobs"] = True
-            request_body["return_prompt_token_ids"] = True
-            request_body["return_meta_info"] = True
-            if getattr(args, "use_rollout_routing_replay", False):
-                request_body["return_routed_experts"] = True
-            # Must be False so stop tokens are trimmed from output: otherwise the
-            # agent sees stop-token text in content, and the accumulated checkpoint
-            # would duplicate structural delimiters that the chat template also emits.
-            request_body["no_stop_trim"] = False
+                # TITO token tracking requires three SGLang flags working together:
+                #   logprobs=True            → populates meta_info.output_token_logprobs
+                #   return_prompt_token_ids  → adds choice.prompt_token_ids
+                #   return_meta_info         → wraps the above in choice.meta_info
+                # All three are hardcoded (not setdefault) to prevent agent-side
+                # overrides from breaking the token accumulation invariants.
+                request_body["logprobs"] = True
+                request_body["return_prompt_token_ids"] = True
+                request_body["return_meta_info"] = True
+                if getattr(args, "use_rollout_routing_replay", False):
+                    request_body["return_routed_experts"] = True
+                # Must be False so stop tokens are trimmed from output: otherwise the
+                # agent sees stop-token text in content, and the accumulated checkpoint
+                # would duplicate structural delimiters that the chat template also emits.
+                request_body["no_stop_trim"] = False
 
-            request_messages = request_body.get("messages", [])
-            pretokenized = session.prepare_pretokenized(
-                request_messages,
-                tools=request_body.get("tools"),
-                tito_tokenizer=registry.tito_tokenizer,
-            )
-            if pretokenized is not None:
-                request_body["input_ids"] = pretokenized["input_ids"]
-                logger.debug(
-                    "Using pretokenized input_ids: %d tokens",
-                    len(pretokenized["input_ids"]),
+                request_messages = request_body.get("messages", [])
+                pretokenized = session.prepare_pretokenized(
+                    request_messages,
+                    tools=request_body.get("tools"),
+                    tito_tokenizer=registry.tito_tokenizer,
+                )
+                if pretokenized is not None:
+                    request_body["input_ids"] = pretokenized["input_ids"]
+                    logger.debug(
+                        "Using pretokenized input_ids: %d tokens",
+                        len(pretokenized["input_ids"]),
+                    )
+
+                body = json.dumps(request_body).encode()
+
+                result = await backend.do_proxy(request, "v1/chat/completions", body=body)
+
+                # If SGLang returned a non-200 error (e.g. 400 for context too long),
+                # pass it through to the agent without recording — the agent can retry
+                # or handle the error.
+                if result["status_code"] != 200:
+                    return backend.build_proxy_response(result)
+
+                response = json.loads(result["response_body"])
+
+                choice = response.get("choices", [{}])[0]
+
+                meta_info = choice.get("meta_info")
+                if not isinstance(meta_info, dict) or "output_token_logprobs" not in meta_info:
+                    raise UpstreamResponseError(
+                        "meta_info and output_token_logprobs must be in choice (requires logprobs=True)"
+                    )
+                assistant_message = choice.get("message", {})
+                if assistant_message.get("content") is None:
+                    raise UpstreamResponseError(
+                        "assistant message content is None, when tool call parser failed SGLang should still return "
+                        "an empty content rather than None. Please check your modified SGLang version."
+                    )
+
+                prompt_token_ids = choice.get("prompt_token_ids")
+                output_token_logprobs = meta_info["output_token_logprobs"]
+                completion_tokens = meta_info["completion_tokens"]
+
+                actual_output_logprobs_len = len(output_token_logprobs)
+                if actual_output_logprobs_len != completion_tokens:
+                    raise UpstreamResponseError(
+                        "invalid chat completion response: "
+                        f"len(output_token_logprobs)={actual_output_logprobs_len} "
+                        f"!= completion_tokens={completion_tokens}. "
+                        f"Please check whether you use the correct SGLang branch which has fix the tokenizer batch decode issue."
+                    )
+
+                completion_token_ids = [t[1] for t in output_token_logprobs]
+
+                session.update_pretokenized_state(
+                    request_messages,
+                    assistant_message,
+                    prompt_token_ids=prompt_token_ids,
+                    completion_token_ids=completion_token_ids,
+                    max_trim_tokens=registry.tito_tokenizer.max_trim_tokens,
                 )
 
-            body = json.dumps(request_body).encode()
-
-            result = await backend.do_proxy(request, "v1/chat/completions", body=body)
-
-            # If SGLang returned a non-200 error (e.g. 400 for context too long),
-            # pass it through to the agent without recording — the agent can retry
-            # or handle the error.
-            if result["status_code"] != 200:
+                record = SessionRecord(
+                    timestamp=time.time(),
+                    method=request.method,
+                    path="/v1/chat/completions",
+                    status_code=result["status_code"],
+                    request=request_body,
+                    response=response,
+                )
+                session.append_record(record)
                 return backend.build_proxy_response(result)
-
-            response = json.loads(result["response_body"])
-
-            choice = response.get("choices", [{}])[0]
-
-            meta_info = choice.get("meta_info")
-            if not isinstance(meta_info, dict) or "output_token_logprobs" not in meta_info:
-                raise UpstreamResponseError(
-                    "meta_info and output_token_logprobs must be in choice (requires logprobs=True)"
-                )
-            assistant_message = choice.get("message", {})
-            if assistant_message.get("content") is None:
-                raise UpstreamResponseError(
-                    "assistant message content is None, when tool call parser failed SGLang should still return "
-                    "an empty content rather than None. Please check your modified SGLang version."
-                )
-
-            prompt_token_ids = choice.get("prompt_token_ids")
-            output_token_logprobs = meta_info["output_token_logprobs"]
-            completion_tokens = meta_info["completion_tokens"]
-
-            actual_output_logprobs_len = len(output_token_logprobs)
-            if actual_output_logprobs_len != completion_tokens:
-                raise UpstreamResponseError(
-                    "invalid chat completion response: "
-                    f"len(output_token_logprobs)={actual_output_logprobs_len} "
-                    f"!= completion_tokens={completion_tokens}. "
-                    f"Please check whether you use the correct SGLang branch which has fix the tokenizer batch decode issue."
-                )
-
-            completion_token_ids = [t[1] for t in output_token_logprobs]
-
-            session.update_pretokenized_state(
-                request_messages,
-                assistant_message,
-                prompt_token_ids=prompt_token_ids,
-                completion_token_ids=completion_token_ids,
-                max_trim_tokens=registry.tito_tokenizer.max_trim_tokens,
-            )
-
-            record = SessionRecord(
-                timestamp=time.time(),
-                method=request.method,
-                path="/v1/chat/completions",
-                status_code=result["status_code"],
-                request=request_body,
-                response=response,
-            )
-            session.append_record(record)
-            return backend.build_proxy_response(result)
+        finally:
+            _inflight_chat["count"] -= 1
 
     @app.api_route("/sessions/{session_id}/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
     async def session_proxy(request: Request, session_id: str, path: str):
