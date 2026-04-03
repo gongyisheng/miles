@@ -1,4 +1,4 @@
-"""Unit tests for SessionRegistry and SingleUserTurnTrajectory.
+"""Unit tests for SessionRegistry and LinearTrajectory.
 
 Tests the session registry CRUD and the trajectory pretokenized state management
 logic in isolation (no HTTP server, no real tokenizer).
@@ -11,9 +11,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from miles.rollout.session.linear_trajectory import SessionRegistry
 from miles.rollout.session.session_errors import MessageValidationError, SessionNotFoundError, TokenizationError
 from miles.rollout.session.session_types import SessionRecord
-from miles.rollout.session.single_user_turn_trajectory import SessionRegistry
 from miles.utils.chat_template_utils.tito_tokenizer import TITOTokenizer
 
 
@@ -276,7 +276,8 @@ class TestSingleUserTurnPretokenized:
 # TestAppendRole* — allowed_append_roles policy tests
 #
 # Each class tests one configuration: tool-only (default), tool+system,
-# tool+user.  Tests verify which roles are accepted / rejected.
+# tool+user.  Tests verify which appended roles are accepted or rejected
+# under each allowed_append_roles setting.
 # ---------------------------------------------------------------------------
 
 
@@ -365,7 +366,7 @@ class TestAppendRoleToolSystem:
 
 
 class TestAppendRoleToolUser:
-    """Config: allowed_append_roles=['tool', 'user']."""
+    """Config: allowed_append_roles=['tool', 'user']; user follow-ups are allowed here."""
 
     def test_tool_append_allowed(self, registry_with_user: SessionRegistry):
         sid = registry_with_user.create_session()
@@ -656,7 +657,7 @@ class TestComputeSessionMismatch:
         session = registry.get_session(sid)
         assert registry.compute_session_mismatch(session) is None
 
-    @patch("miles.rollout.session.single_user_turn_trajectory.apply_chat_template")
+    @patch("miles.rollout.session.linear_trajectory.apply_chat_template")
     def test_returns_empty_list_when_no_mismatch(self, mock_template, registry: SessionRegistry):
         sid = registry.create_session()
         session = registry.get_session(sid)
@@ -674,7 +675,7 @@ class TestComputeSessionMismatch:
         assert result == []
         mock_comparator.compare_sequences.assert_called_once_with([1, 2, 3, 10, 11], [1, 2, 3, 10, 11])
 
-    @patch("miles.rollout.session.single_user_turn_trajectory.apply_chat_template")
+    @patch("miles.rollout.session.linear_trajectory.apply_chat_template")
     def test_returns_mismatch_dicts(self, mock_template, registry: SessionRegistry):
         sid = registry.create_session()
         session = registry.get_session(sid)
@@ -696,7 +697,7 @@ class TestComputeSessionMismatch:
         result = registry.compute_session_mismatch(session)
         assert result == [{"position": 2, "detail": "mismatch"}]
 
-    @patch("miles.rollout.session.single_user_turn_trajectory.apply_chat_template")
+    @patch("miles.rollout.session.linear_trajectory.apply_chat_template")
     def test_raises_tokenization_error_on_exception(self, mock_template, registry: SessionRegistry):
         sid = registry.create_session()
         session = registry.get_session(sid)
@@ -707,7 +708,7 @@ class TestComputeSessionMismatch:
         with pytest.raises(TokenizationError, match="tokenizer failed"):
             registry.compute_session_mismatch(session)
 
-    @patch("miles.rollout.session.single_user_turn_trajectory.apply_chat_template")
+    @patch("miles.rollout.session.linear_trajectory.apply_chat_template")
     def test_uses_tools_from_last_record(self, mock_template, registry: SessionRegistry):
         sid = registry.create_session()
         session = registry.get_session(sid)

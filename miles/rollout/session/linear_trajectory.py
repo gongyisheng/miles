@@ -35,8 +35,8 @@ def _assert_no_user_after_assistant(messages: list[dict[str, Any]]) -> None:
 
 
 @dataclass
-class SingleUserTurnTrajectory:
-    """State for a single-user-turn trajectory.
+class LinearTrajectory:
+    """State for a linear trajectory.
 
     Tracks the full message history and accumulated token IDs for one session.
     The typical message sequence is: [system?, user, assistant, tool, assistant, tool, …],
@@ -79,7 +79,7 @@ class SingleUserTurnTrajectory:
         # 1. Detect agent retries and roll back (at most one assistant step).
         self._try_detect_and_rollback_to_assistant_checkpoint(request_messages)
         # 2. Confirm the (possibly rolled-back) stored messages are a prefix of request,
-        #    and that appended messages have allowed roles only.
+        #    and that each appended message role is in tito_tokenizer.allowed_append_roles.
         try:
             assert_messages_append_only_with_allowed_role(
                 self.messages, request_messages, tito_tokenizer.allowed_append_roles
@@ -247,11 +247,11 @@ class SessionRegistry:
 
     Pure CRUD plus read-only computation (compute_session_mismatch).
     Does NOT mutate session state - all mutations are methods on
-    SingleUserTurnTrajectory, called by the route handler under session.lock.
+    LinearTrajectory; called by the route handler under session.lock.
     """
 
     def __init__(self, args, tokenizer: Any, *, tito_tokenizer: TITOTokenizer):
-        self.sessions: dict[str, SingleUserTurnTrajectory] = {}
+        self.sessions: dict[str, LinearTrajectory] = {}
         self.args = args
         self.tokenizer = tokenizer
         self.tito_tokenizer = tito_tokenizer
@@ -259,10 +259,10 @@ class SessionRegistry:
 
     def create_session(self) -> str:
         session_id = uuid.uuid4().hex
-        self.sessions[session_id] = SingleUserTurnTrajectory()
+        self.sessions[session_id] = LinearTrajectory()
         return session_id
 
-    def get_session(self, session_id: str) -> SingleUserTurnTrajectory:
+    def get_session(self, session_id: str) -> LinearTrajectory:
         session = self.sessions.get(session_id)
         if session is None:
             raise SessionNotFoundError(f"session not found: session_id={session_id}")
@@ -272,7 +272,7 @@ class SessionRegistry:
         if self.sessions.pop(session_id, None) is None:
             raise SessionNotFoundError(f"session not found: session_id={session_id}")
 
-    def compute_session_mismatch(self, session: SingleUserTurnTrajectory) -> list[dict] | None:
+    def compute_session_mismatch(self, session: LinearTrajectory) -> list[dict] | None:
         """Compare accumulated token IDs against canonical chat template output.
 
         Read-only: does not mutate session state.
