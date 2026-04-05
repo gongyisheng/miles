@@ -11,6 +11,7 @@ from ray import ObjectRef
 from ray.actor import ActorHandle
 
 from miles.backends.megatron_utils.lora_utils import LORA_ADAPTER_NAME, build_lora_sync_config
+from miles.backends.training_utils.parallel import get_parallel_state
 from miles.utils.distributed_utils import get_gloo_group
 
 from ..sglang import FlattenedTensorBucket, MultiprocessingSerializer
@@ -121,7 +122,7 @@ class UpdateWeightFromTensor:
             self.distributed_rollout_engines = rollout_engines[colocate_engine_nums:]
             distributed_gpu_counts = engine_gpu_counts[colocate_engine_nums:]
             self._is_distributed_src_rank = (
-                mpu.get_data_parallel_rank(with_context_parallel=True) == 0
+                get_parallel_state().intra_dp_cp.rank == 0
                 and mpu.get_tensor_model_parallel_rank() == 0
                 and mpu.get_pipeline_model_parallel_rank() == 0
             )
@@ -187,9 +188,9 @@ class UpdateWeightFromTensor:
             ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
             if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
                 post_process_weights(
+                    rollout_engines=self.rollout_engines,
                     restore_weights_before_load=True,
                     post_process_quantization=False,
-                    rollout_engines=self.rollout_engines,
                 )
         dist.barrier(group=get_gloo_group())
 
@@ -233,9 +234,9 @@ class UpdateWeightFromTensor:
                 "mxfp8",
             ]:
                 post_process_weights(
+                    rollout_engines=self.rollout_engines,
                     restore_weights_before_load=False,
                     post_process_quantization=True,
-                    rollout_engines=self.rollout_engines,
                 )
             ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
         dist.barrier(group=get_gloo_group())
