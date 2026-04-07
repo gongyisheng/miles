@@ -189,17 +189,19 @@ class UpdateWeightFromTensor:
 
         megatron_local_weights = self.weights_getter()
 
+        all_refs = []
+        all_long_lived_tensors = []
+        base_ref_count = 0
+
         # For LoRA+distributed: base weights are frozen, skip after first round.
         if not (self.is_lora and self.use_distribute and self._lora_base_synced):
-            base_sync_chunk_count = 0
             for hf_named_tensors in self._hf_weight_iterator.get_hf_weight_chunks(
                 megatron_local_weights, weight_type="base"
             ):
                 refs, long_lived_tensors = self._send_base_params(hf_named_tensors)
-                results = ray.get(refs)
-                _check_weight_sync_results(results, is_lora=False)
-                del long_lived_tensors
-                base_sync_chunk_count += 1
+                all_refs.extend(refs)
+                all_long_lived_tensors.append(long_lived_tensors)
+            base_ref_count = len(all_refs)
 
         if self.is_lora:
             lora_sync_chunk_count = 0
@@ -207,9 +209,8 @@ class UpdateWeightFromTensor:
                 megatron_local_weights, weight_type="lora"
             ):
                 refs, long_lived_tensors = self._send_lora_params(hf_named_tensors)
-                results = ray.get(refs)
-                _check_weight_sync_results(results, is_lora=True)
-                del long_lived_tensors
+                all_refs.extend(refs)
+                all_long_lived_tensors.append(long_lived_tensors)
                 lora_sync_chunk_count += 1
 
             if lora_sync_chunk_count == 0:
@@ -221,6 +222,14 @@ class UpdateWeightFromTensor:
 
             if self.use_distribute and not self._lora_base_synced:
                 self._lora_base_synced = True
+
+        # Wait for all engine-side weight loading to complete.
+        if all_refs:
+            all_results = ray.get(all_refs)
+            _check_weight_sync_results(all_results[:base_ref_count], is_lora=False)
+            if self.is_lora:
+                _check_weight_sync_results(all_results[base_ref_count:], is_lora=True)
+            del all_long_lived_tensors
 
         dist.barrier(group=get_gloo_group())
 
