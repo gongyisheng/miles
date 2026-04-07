@@ -2,7 +2,7 @@ import asyncio
 import copy
 import inspect
 import logging
-
+import uuid
 from argparse import Namespace
 from collections.abc import Callable
 from contextlib import contextmanager
@@ -17,12 +17,18 @@ from tqdm import tqdm
 from miles.backends.megatron_utils.lora_utils import LORA_ADAPTER_NAME, is_lora_enabled
 from miles.rollout.base_types import RolloutFnEvalOutput, RolloutFnTrainOutput
 from miles.rollout.filter_hub.base_types import MetricGatherer, call_dynamic_filter
+from miles.utils import dumper_utils
 from miles.utils.async_utils import run
 from miles.utils.data import Dataset
 from miles.utils.eval_config import EvalDatasetConfig
 from miles.utils.http_utils import get, post
 from miles.utils.misc import SingletonMeta, load_function
-from miles.utils.processing_utils import encode_image_for_rollout_engine, load_processor, load_tokenizer
+from miles.utils.processing_utils import (
+    build_processor_kwargs,
+    encode_image_for_rollout_engine,
+    load_processor,
+    load_tokenizer,
+)
 from miles.utils.types import Sample
 
 from .rm_hub import async_rm, batched_async_rm
@@ -135,7 +141,8 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     ), f"Sample status is {sample.status}"
 
     if state.processor and sample.multimodal_inputs and any(v is not None for v in sample.multimodal_inputs.values()):
-        processor_output = state.processor(text=sample.prompt, **sample.multimodal_inputs)
+        processor_kwargs = build_processor_kwargs(sample.multimodal_inputs)
+        processor_output = state.processor(text=sample.prompt, **processor_kwargs)
         prompt_ids = processor_output["input_ids"][0]
         sample.multimodal_train_inputs = {
             k: v for k, v in processor_output.items() if k not in ["input_ids", "attention_mask"]
@@ -177,7 +184,12 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         if not sample.tokens:  # Initialize sample.tokens for the first turn
             sample.tokens = prompt_ids
 
-    output = await post(url, payload)
+    # Use session_id for consistent hashing routing if router uses consistent_hashing policy
+    headers = None
+    if args.sglang_router_policy == "consistent_hashing" and sample.session_id:
+        headers = {"X-SMG-Routing-Key": sample.session_id}
+
+    output = await post(url, payload, headers=headers)
 
     if args.use_miles_router and "RadixTreeMiddleware" in args.miles_router_middleware_paths:
         from miles.router.middleware_hub.radix_tree_middleware import postprocess_sample_with_radix_tree
@@ -292,6 +304,12 @@ async def generate_and_rm_group(
     if state.aborted:
         return group
 
+    # Generate a unique session_id for each sample in the group (consistent hashing only)
+    if args.sglang_router_policy == "consistent_hashing":
+        for sample in group:
+            if sample.session_id is None:
+                sample.session_id = str(uuid.uuid4())
+
     tasks = []
     for idx, sample in enumerate(group):
         current_sampling_params = sampling_params.copy()
@@ -373,6 +391,8 @@ async def generate_rollout_async(
             - aborted_samples: any partial groups collected during abort when partial_rollout is enabled
     """
     assert args.rollout_global_dataset
+
+    await dumper_utils.configure_sglang(args)
 
     state = GenerateState(args)
 

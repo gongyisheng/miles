@@ -47,6 +47,10 @@ class Sample:
     # metadata used during training, e.g., what loss to use for this sample.
     train_metadata: dict | None = None
 
+    # Session ID for consistent hashing routing (used when router policy is consistent_hashing)
+    # TODO: Its definition needs to merge with the session server's session id in the new rollout function.
+    session_id: str | None = None
+
     non_generation_time: float = 0.0  # time spent in non-generation steps
 
     @dataclass
@@ -166,6 +170,23 @@ class Sample:
             actual = len(self.rollout_routed_experts)
             expect = len(self.tokens) - 1
             assert actual == expect, f"rollout_routed_experts length ({actual}) != len(tokens) - 1 ({expect})"
+
+    def strip_last_output_tokens(self, n: int, tokenizer) -> None:
+        """Remove the last *n* output tokens and all associated per-token info."""
+        if n <= 0:
+            return
+        assert (
+            n <= self.response_length
+        ), f"cannot strip {n} tokens: only {self.response_length} output tokens available"
+        self.tokens = self.tokens[:-n]
+        self.response_length -= n
+        if self.rollout_log_probs is not None:
+            self.rollout_log_probs = self.rollout_log_probs[:-n]
+        if self.loss_mask is not None:
+            self.loss_mask = self.loss_mask[:-n]
+        self.response = tokenizer.decode(self.tokens[-self.response_length :]) if self.response_length > 0 else ""
+        if self.rollout_routed_experts is not None:
+            self.rollout_routed_experts = self.rollout_routed_experts[:-n]
 
     def update_from_meta_info(self, args, meta_info: dict):
         """
