@@ -54,21 +54,14 @@ class UpdateWeightFromTensor:
         self.quantization_config = quantization_config
         self.weight_version = 0
         self.is_lora = is_lora
-        self._hf_base_weight_iterator = HfWeightIteratorBase.create(
+        self._hf_weight_iterator = HfWeightIteratorBase.create(
             args=args,
             model=model,
             model_name=model_name,
             quantization_config=quantization_config,
-            is_lora=False,
+            is_lora=self.is_lora
         )
         if self.is_lora:
-            self._hf_lora_weight_iterator = HfWeightIteratorBase.create(
-                args=args,
-                model=model,
-                model_name=model_name,
-                quantization_config=quantization_config,
-                is_lora=True,
-            )
             self._lora_config = build_lora_sync_config(args)
             self._lora_loaded = False
             self._lora_base_synced = False
@@ -199,7 +192,7 @@ class UpdateWeightFromTensor:
         # For LoRA+distributed: base weights are frozen, skip after first round.
         if not (self.is_lora and self.use_distribute and self._lora_base_synced):
             base_sync_chunk_count = 0
-            for hf_named_tensors in self._hf_base_weight_iterator.get_hf_weight_chunks(megatron_local_weights):
+            for hf_named_tensors in self._hf_weight_iterator.get_hf_weight_chunks(megatron_local_weights, weight_type="base"):
                 refs, long_lived_tensors = self._send_base_params(hf_named_tensors)
                 results = ray.get(refs)
                 _check_weight_sync_results(results, is_lora=False)
@@ -208,7 +201,7 @@ class UpdateWeightFromTensor:
 
         if self.is_lora:
             lora_sync_chunk_count = 0
-            for hf_named_tensors in self._hf_lora_weight_iterator.get_hf_weight_chunks(megatron_local_weights):
+            for hf_named_tensors in self._hf_weight_iterator.get_hf_weight_chunks(megatron_local_weights, weight_type="lora"):
                 refs, long_lived_tensors = self._send_lora_params(hf_named_tensors)
                 results = ray.get(refs)
                 _check_weight_sync_results(results, is_lora=True)
