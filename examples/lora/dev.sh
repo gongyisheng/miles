@@ -71,7 +71,7 @@ PERF_ARGS=(
    --expert-tensor-parallel-size 1
 
    --use-dynamic-batch-size
-   --max-tokens-per-gpu 8192
+   --max-tokens-per-gpu 4096
 )
 
 GRPO_ARGS=(
