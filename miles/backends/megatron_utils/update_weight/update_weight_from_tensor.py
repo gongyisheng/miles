@@ -59,7 +59,7 @@ class UpdateWeightFromTensor:
             model=model,
             model_name=model_name,
             quantization_config=quantization_config,
-            is_lora=self.is_lora
+            is_lora=self.is_lora,
         )
         if self.is_lora:
             self._lora_config = build_lora_sync_config(args)
@@ -192,7 +192,9 @@ class UpdateWeightFromTensor:
         # For LoRA+distributed: base weights are frozen, skip after first round.
         if not (self.is_lora and self.use_distribute and self._lora_base_synced):
             base_sync_chunk_count = 0
-            for hf_named_tensors in self._hf_weight_iterator.get_hf_weight_chunks(megatron_local_weights, weight_type="base"):
+            for hf_named_tensors in self._hf_weight_iterator.get_hf_weight_chunks(
+                megatron_local_weights, weight_type="base"
+            ):
                 refs, long_lived_tensors = self._send_base_params(hf_named_tensors)
                 results = ray.get(refs)
                 _check_weight_sync_results(results, is_lora=False)
@@ -201,7 +203,9 @@ class UpdateWeightFromTensor:
 
         if self.is_lora:
             lora_sync_chunk_count = 0
-            for hf_named_tensors in self._hf_weight_iterator.get_hf_weight_chunks(megatron_local_weights, weight_type="lora"):
+            for hf_named_tensors in self._hf_weight_iterator.get_hf_weight_chunks(
+                megatron_local_weights, weight_type="lora"
+            ):
                 refs, long_lived_tensors = self._send_lora_params(hf_named_tensors)
                 results = ray.get(refs)
                 _check_weight_sync_results(results, is_lora=True)
