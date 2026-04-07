@@ -531,6 +531,7 @@ class MegatronTrainRayActor(TrainRayActor):
                 else:
                     self.weights_backuper.backup("old_actor")
 
+        if self.args.offload_train:
             destroy_process_groups()
 
     def load_other_checkpoint(self, model_tag: str, path: str) -> None:
