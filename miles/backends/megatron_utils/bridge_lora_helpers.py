@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 from megatron.core.utils import get_attr_wrapped_model
 
-from .dpp_lora_patch import patch_ddp_for_colocate_mode_lora
+from .ddp_lora_patch import patch_ddp_for_colocate_mode_lora
 from .lora_utils import create_lora_instance
 
 
