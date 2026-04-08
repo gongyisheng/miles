@@ -37,7 +37,7 @@ from .ci_utils import (
     save_model_hashes,
 )
 from .initialize import is_megatron_main_rank
-from .lora_utils import is_lora_enabled, is_lora_model, move_lora_params_to_region
+from .lora_utils import is_lora_enabled, is_lora_model
 from .model_provider import get_model_provider_func
 from .parallel import get_packed_seq_params
 
@@ -804,9 +804,6 @@ def initialize_model_and_optimizer(
     )
     check_peak_gpu_memory_after_load(args)
     clear_memory()
-
-    if is_lora_enabled(args) and args.offload_train:
-        move_lora_params_to_region(model)
 
     check_model_hashes(args, model, iteration)
 
