@@ -118,5 +118,10 @@ def _setup_lora_model_via_bridge(args: Namespace) -> list:
     ddp_config = DistributedDataParallelConfig(use_distributed_optimizer=True)
     ddp_config.finalize()
 
+    if getattr(args, "offload_train", False):
+        from .ddp_lora_patch import patch_ddp_for_colocate_mode_lora
+
+        patch_ddp_for_colocate_mode_lora()
+
     model = provider.provide_distributed_model(wrap_with_ddp=True, ddp_config=ddp_config)
     return model
