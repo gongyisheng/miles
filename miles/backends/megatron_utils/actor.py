@@ -188,7 +188,8 @@ class MegatronTrainRayActor(TrainRayActor):
         print_memory("before offload model")
         destroy_process_groups()
 
-        torch_memory_saver.pause(tag="default")
+        tag = "default" if is_lora_enabled(self.args) else None
+        torch_memory_saver.pause(tag=tag)
 
         print_memory("after offload model")
 
@@ -200,7 +201,8 @@ class MegatronTrainRayActor(TrainRayActor):
         assert self.args.offload_train
         print_memory("before wake_up model")
 
-        torch_memory_saver.resume(tag="default")
+        tag = "default" if is_lora_enabled(self.args) else None
+        torch_memory_saver.resume(tag=tag)
 
         clear_memory()
         reload_process_groups()
