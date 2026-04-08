@@ -188,7 +188,7 @@ class MegatronTrainRayActor(TrainRayActor):
         print_memory("before offload model")
         destroy_process_groups()
 
-        torch_memory_saver.pause()
+        torch_memory_saver.pause(tag="default")
 
         print_memory("after offload model")
 
@@ -200,7 +200,7 @@ class MegatronTrainRayActor(TrainRayActor):
         assert self.args.offload_train
         print_memory("before wake_up model")
 
-        torch_memory_saver.resume()
+        torch_memory_saver.resume(tag="default")
 
         clear_memory()
         reload_process_groups()
@@ -507,13 +507,6 @@ class MegatronTrainRayActor(TrainRayActor):
             if dist.get_rank() == 0:
                 ray.get(self.rollout_manager.clear_updatable_num_new_engines.remote())
 
-        if self.args.offload_train and is_lora_enabled(self.args):
-            # For LoRA, we must resume() to restore GPU memory backing for adapter
-            # weights. Unlike base model weights (which are read from CPU backups),
-            # LoRA adapter weights are accessed directly from GPU model parameters.
-            # The disable() context alone only prevents new allocations from being
-            # tracked -- it does NOT restore previously paused/offloaded tensors.
-            torch_memory_saver.resume()
         with torch_memory_saver.disable() if self.args.offload_train else nullcontext():
             print_memory("before update_weights")
             self.weight_updater.update_weights()
@@ -539,8 +532,6 @@ class MegatronTrainRayActor(TrainRayActor):
                     self.weights_backuper.backup("old_actor")
 
         if self.args.offload_train:
-            if is_lora_enabled(self.args):
-                torch_memory_saver.resume()
             destroy_process_groups()
 
     def load_other_checkpoint(self, model_tag: str, path: str) -> None:

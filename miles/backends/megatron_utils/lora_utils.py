@@ -10,6 +10,7 @@ from typing import Any
 import torch
 import torch.distributed as dist
 from megatron.core import mpu
+from torch_memory_saver import torch_memory_saver
 
 from miles.backends.training_utils.parallel import get_parallel_state
 
@@ -103,6 +104,27 @@ def is_lora_weight_name(name: str) -> bool:
 def _is_adapter_param_name(name: str) -> bool:
     """Check if a parameter name belongs to a LoRA adapter (Megatron internal naming)."""
     return "lora_" in name or (".adapter." in name and ("linear_in" in name or "linear_out" in name))
+
+
+def move_lora_params_to_region(model: Sequence, tag: str = "lora") -> None:
+    """Re-allocate LoRA adapter params into a separate torch_memory_saver region.
+
+    After model creation, all params (base + LoRA) live in the default memory
+    pool.  This function moves LoRA params into their own pool so that
+    ``pause(tag="default")`` only offloads base weights while LoRA params
+    stay on GPU.
+    """
+
+    count = 0
+    with torch_memory_saver.region(tag=tag):
+        for module in model:
+            for name, param in module.named_parameters():
+                if _is_adapter_param_name(name):
+                    new_data = torch.empty_like(param.data)
+                    new_data.copy_(param.data)
+                    param.data = new_data
+                    count += 1
+    logger.info("Moved %d LoRA params to torch_memory_saver region '%s'", count, tag)
 
 
 # ---------------------------------------------------------------------------
