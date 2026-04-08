@@ -10,7 +10,7 @@ from megatron.core import mpu
 from ray import ObjectRef
 from ray.actor import ActorHandle
 
-from miles.backends.megatron_utils.lora_utils import LORA_ADAPTER_NAME, build_lora_sync_config
+from miles.backends.megatron_utils.lora_utils import LORA_ADAPTER_NAME, build_lora_sync_config, is_lora_weight_name
 from miles.backends.training_utils.parallel import get_parallel_state
 from miles.utils.distributed_utils import get_gloo_group
 
@@ -268,6 +268,11 @@ class UpdateWeightFromTensor:
             return refs or [], long_lived_tensors
 
     def _send_lora_params(self, hf_named_tensors) -> tuple[list[ObjectRef], Any]:
+        if not any(is_lora_weight_name(n) for n, _ in hf_named_tensors):
+            raise RuntimeError(
+                "LoRA weight sync failed: chunk contains no LoRA weights "
+                "(no lora_A/lora_B names found). Check weight iterator configuration."
+            )
         if self.use_distribute and self._is_distributed_src_rank:
             raise NotImplementedError("LoRA weight sync is not yet supported for distributed (non-colocated) engines")
         else:
