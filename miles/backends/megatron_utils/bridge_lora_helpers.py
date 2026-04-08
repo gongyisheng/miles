@@ -11,8 +11,7 @@ from dataclasses import dataclass
 
 from megatron.core.utils import get_attr_wrapped_model
 
-from .ddp_lora_patch import patch_ddp_for_colocate_mode_lora
-from .lora_utils import create_lora_instance
+from .lora_utils import create_lora_instance, patch_param_grad_buffer_for_colocate_mode_lora
 
 
 @dataclass
@@ -120,7 +119,7 @@ def _setup_lora_model_via_bridge(args: Namespace) -> list:
     ddp_config.finalize()
 
     if args.offload_train:
-        patch_ddp_for_colocate_mode_lora()
+        patch_param_grad_buffer_for_colocate_mode_lora()
 
     model = provider.provide_distributed_model(wrap_with_ddp=True, ddp_config=ddp_config)
     return model
