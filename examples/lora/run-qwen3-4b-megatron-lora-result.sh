@@ -149,8 +149,7 @@ ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus ${NUM_GPUS} --disab
 RUNTIME_ENV_JSON='{
   "env_vars": {
     "PYTHONPATH": "/root/Megatron-LM",
-    "CUDA_DEVICE_MAX_CONNECTIONS": "1",
-    "NCCL_ALGO": "Ring"
+    "CUDA_DEVICE_MAX_CONNECTIONS": "1"
   }
 }'
 
