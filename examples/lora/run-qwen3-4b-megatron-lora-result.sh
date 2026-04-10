@@ -150,8 +150,7 @@ RUNTIME_ENV_JSON='{
   "env_vars": {
     "PYTHONPATH": "/root/Megatron-LM",
     "CUDA_DEVICE_MAX_CONNECTIONS": "1",
-    "NCCL_ALGO": "Ring",
-    "CUBLAS_WORKSPACE_CONFIG": ":4096:8"
+    "NCCL_ALGO": "Ring"
   }
 }'
 

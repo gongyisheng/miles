@@ -178,9 +178,7 @@ ray job submit --address="http://127.0.0.1:8265" \
      "env_vars": {
         "PYTHONPATH": "/root/Megatron-LM",
         "CUDA_DEVICE_MAX_CONNECTIONS": "1",
-        "NCCL_ALGO": "Ring",
-        "NVTE_ALLOW_NONDETERMINISTIC_ALGO": "0",
-        "CUBLAS_WORKSPACE_CONFIG": ":4096:8"
+        "NCCL_ALGO": "Ring"
      }
    }' \
    -- python3 train.py \
