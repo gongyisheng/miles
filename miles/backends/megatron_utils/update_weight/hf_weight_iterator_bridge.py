@@ -44,7 +44,7 @@ class HfWeightIteratorBridge(HfWeightIteratorBase):
                     postprocess_hf_param(
                         args=self.args,
                         megatron_param_name=megatron_param_name,
-                        hf_param_name=hf_param_name,
+                        hf_param_name=hf_param_name.replace(".base_layer.", "."),
                         param=weight,
                     ),
                 )
