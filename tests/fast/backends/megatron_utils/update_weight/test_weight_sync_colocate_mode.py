@@ -482,9 +482,7 @@ class TestSendToColocatedEngine:
         # Track invocation order across the two ipc_engine methods.
         ipc_engine = MagicMock()
         call_order = []
-        ipc_engine.unload_lora_adapter.remote.side_effect = (
-            lambda **kw: call_order.append("unload") or MagicMock()
-        )
+        ipc_engine.unload_lora_adapter.remote.side_effect = lambda **kw: call_order.append("unload") or MagicMock()
         ipc_engine.load_lora_adapter_from_tensors.remote.side_effect = (
             lambda **kw: call_order.append("load") or MagicMock()
         )
@@ -511,9 +509,7 @@ class TestSendToColocatedEngine:
     @patch(f"{_UW_MODULE}.ray")
     @patch(f"{_UW_MODULE}.dist")
     @patch(f"{_UW_MODULE}.HfWeightIteratorBase")
-    def test_rank_zero_rpc_order_for_base(
-        self, mock_iter_base, mock_dist, mock_ray, mock_gloo, mock_pp
-    ):
+    def test_rank_zero_rpc_order_for_base(self, mock_iter_base, mock_dist, mock_ray, mock_gloo, mock_pp):
         """Full-param RL: on rank 0, RPCs must follow
             pause_generation → flush_cache → _send_base_params
                 → post_process_weights → continue_generation
@@ -553,9 +549,7 @@ class TestSendToColocatedEngine:
     @patch(f"{_UW_MODULE}.ray")
     @patch(f"{_UW_MODULE}.dist")
     @patch(f"{_UW_MODULE}.HfWeightIteratorBase")
-    def test_rank_zero_rpc_order_for_lora(
-        self, mock_iter_base, mock_dist, mock_ray, mock_gloo, mock_pp
-    ):
+    def test_rank_zero_rpc_order_for_lora(self, mock_iter_base, mock_dist, mock_ray, mock_gloo, mock_pp):
         """LoRA RL (colocated): on rank 0, RPCs must follow
             pause_generation → flush_cache → _send_base_params → _send_lora_params
                 → post_process_weights → continue_generation
@@ -591,7 +585,6 @@ class TestSendToColocatedEngine:
             "post_process_weights",
             "continue_generation",
         ]
-
 
     @pytest.mark.parametrize(
         "lora_config",
@@ -673,9 +666,7 @@ class TestUpdateWeightForFullParamRL:
     @patch(f"{_UW_MODULE}.ray")
     @patch(f"{_UW_MODULE}.dist")
     @patch(f"{_UW_MODULE}.HfWeightIteratorBase")
-    def test_colocate_mode_weight_sync_behavior(
-        self, mock_iter_base, mock_dist, mock_ray, mock_gloo, mock_pp
-    ):
+    def test_colocate_mode_weight_sync_behavior(self, mock_iter_base, mock_dist, mock_ray, mock_gloo, mock_pp):
         """Drive update_weights() twice; verify base sent both rounds, lora never."""
         mock_dist.get_rank.return_value = 0
         mock_ray.get.return_value = []
@@ -784,9 +775,7 @@ class TestUpdateWeightForLoRARL:
     @patch(f"{_UW_MODULE}.ray")
     @patch(f"{_UW_MODULE}.dist")
     @patch(f"{_UW_MODULE}.HfWeightIteratorBase")
-    def test_colocate_mode_weight_sync_behavior(
-        self, mock_iter_base, mock_dist, mock_ray, mock_gloo, mock_pp
-    ):
+    def test_colocate_mode_weight_sync_behavior(self, mock_iter_base, mock_dist, mock_ray, mock_gloo, mock_pp):
         """Drive update_weights() twice; verify each round sends base BEFORE
         lora (the LoRA adapter must reference fresh base weights), and that
         the iterator's weight_type filtering routes the right chunk to each
@@ -820,9 +809,7 @@ class TestUpdateWeightForLoRARL:
     @patch(f"{_UW_MODULE}.ray")
     @patch(f"{_UW_MODULE}.dist")
     @patch(f"{_UW_MODULE}.HfWeightIteratorBase")
-    def test_colocate_mode_raise_on_zero_chunks(
-        self, mock_iter_base, mock_dist, mock_ray, mock_gloo
-    ):
+    def test_colocate_mode_raise_on_zero_chunks(self, mock_iter_base, mock_dist, mock_ray, mock_gloo):
         """LoRA sync with zero chunks signals a real incompatibility and must raise."""
         mock_dist.get_rank.return_value = 0
 
