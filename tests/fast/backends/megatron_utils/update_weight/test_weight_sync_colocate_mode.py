@@ -14,7 +14,7 @@ test_update_weight_common.py since that helper is defined in common.py.
 
 from tests.ci.ci_register import register_cpu_ci
 
-register_cpu_ci(est_time=60, suite="stage-a-fast")
+register_cpu_ci(est_time=60, suite="stage-a-cpu", labels=[])
 
 
 from argparse import Namespace

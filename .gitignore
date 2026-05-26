@@ -193,4 +193,5 @@ _examples_synced/
 .env
 .DS_Store
 
+.humanize/
 docs/superpowers
