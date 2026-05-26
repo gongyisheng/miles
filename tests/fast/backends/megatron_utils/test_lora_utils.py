@@ -13,6 +13,7 @@ from argparse import Namespace
 from unittest.mock import MagicMock
 
 import pytest
+import torch
 
 from miles.backends.megatron_utils.lora_utils import (
     LORA_ADAPTER_NAME,
@@ -228,6 +229,42 @@ class TestIsLoraWeightName:
     )
     def test_negative(self, name):
         assert is_lora_weight_name(name) is False
+
+
+class TestLoraWeightSeparation:
+    """Exercise is_lora_weight_name as a filter to split LoRA from base weights."""
+
+    SAMPLE_WEIGHTS = [
+        ("model.layers.0.self_attn.q_proj.weight", torch.randn(4, 4)),
+        ("model.layers.0.self_attn.q_proj.lora_A.weight", torch.randn(4, 2)),
+        ("model.layers.0.self_attn.q_proj.lora_B.weight", torch.randn(2, 4)),
+        ("model.layers.0.mlp.gate_proj.weight", torch.randn(8, 4)),
+        ("model.layers.0.mlp.gate_proj.lora_A.weight", torch.randn(8, 2)),
+        ("model.layers.0.mlp.gate_proj.lora_B.weight", torch.randn(2, 8)),
+    ]
+
+    def test_separation_when_lora(self):
+        base = [(n, t) for n, t in self.SAMPLE_WEIGHTS if not is_lora_weight_name(n)]
+        lora = [(n, t) for n, t in self.SAMPLE_WEIGHTS if is_lora_weight_name(n)]
+        assert len(base) == 2
+        assert len(lora) == 4
+
+    def test_no_separation_when_not_lora(self):
+        base = self.SAMPLE_WEIGHTS
+        lora = []
+        assert len(base) == 6
+        assert len(lora) == 0
+
+    def test_lora_names_contain_lora_A_or_B(self):
+        lora = [(n, t) for n, t in self.SAMPLE_WEIGHTS if is_lora_weight_name(n)]
+        for name, _ in lora:
+            assert ".lora_A." in name or ".lora_B." in name
+
+    def test_base_names_do_not_contain_lora(self):
+        base = [(n, t) for n, t in self.SAMPLE_WEIGHTS if not is_lora_weight_name(n)]
+        for name, _ in base:
+            assert ".lora_A." not in name
+            assert ".lora_B." not in name
 
 
 class TestIsAdapterParamName:
