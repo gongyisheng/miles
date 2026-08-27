@@ -148,7 +148,7 @@ def check_constant_lr_floor(fit, converged, lrs, steps) -> None:
     floors = []
     for lr in lrs:
         floors.append(tail_level(fit.run(steps, constant(lr))))
-        print(f"         constant lr={lr:<8g} floor {floors[-1]:.3e} ({floors[-1] / converged:.2g}x the converged loss)")
+        print(f"         constant lr={lr:<8g} floor {floors[-1]:.3e} ({floors[-1] / converged:.2g}x converged)")
 
     report_bool(
         "every constant lr is thrown back off the optimum",

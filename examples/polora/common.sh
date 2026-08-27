@@ -129,7 +129,7 @@ PERF_ARGS=(
    --recompute-num-layers 1
 
    --use-dynamic-batch-size
-   --max-tokens-per-gpu 32768
+   --max-tokens-per-gpu 16384
 )
 
 GRPO_ARGS=(
@@ -184,6 +184,17 @@ SGLANG_ARGS=(
    # 0.4 is what the validated LoRA+colocate recipe uses
    # (tests/e2e/lora/test_lora_qwen2.5_0.5B.py).
    --sglang-mem-fraction-static 0.4
+
+   # Required for polora, and set on both arms so the comparison stays honest.
+   # --colocate would otherwise default offload_train on, and the trainer's
+   # pause(tag="default") unmaps the LoRA adapter params: Megatron only keeps
+   # them in the survivable "param_buffer" region when the distributed
+   # optimizer is on (param_and_grad_buffer.py), and miles turns that off for
+   # every non-Adam optimizer. The first update_weights then reads unmapped
+   # memory and dies with an illegal memory access. Keeping the trainer
+   # resident is affordable here: 4B bf16 + adapter state alongside sglang's
+   # 0.4 fits an H200 with room to spare.
+   --no-offload-train
 )
 
 MISC_ARGS=(
