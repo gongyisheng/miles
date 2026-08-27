@@ -228,3 +228,26 @@ class TestCollectLoraPairsMegatron:
 
         assert len(pairs) == 1
         assert pairs[0][0].shape == torch.Size([4, 16])
+
+
+class TestMegatronAdapter:
+    def _optimizer(self):
+        pytest.importorskip("megatron.core.optimizer.optimizer")
+        from megatron.core.optimizer import OptimizerConfig
+
+        from miles_plugins.optimizers.polora.megatron_adapter import PoloraMegatronOptimizer
+
+        return PoloraMegatronOptimizer(Polora(pairs=_make_pairs()), OptimizerConfig())
+
+    def test_does_not_shadow_the_grad_stats_parallel_group(self):
+        """``all_reduce(group=None)`` reduces over WORLD, not over nothing.
+
+        Setting the attribute to None would sum the same DDP-averaged gradient
+        once per data-parallel rank, inflating the reported grad norm by
+        ``sqrt(world_size)``. Leaving it unset lets ``MegatronOptimizer`` fall
+        back to the model-parallel group, which is size 1 at TP=PP=1.
+        """
+        assert not hasattr(self._optimizer(), "grad_stats_parallel_group")
+
+    def test_loss_scale_is_one(self):
+        assert self._optimizer().get_loss_scale().item() == 1.0

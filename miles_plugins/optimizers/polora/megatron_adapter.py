@@ -40,9 +40,14 @@ class PoloraMegatronOptimizer(MegatronOptimizer):
     def __init__(self, optimizer, config, init_state_fn=lambda x: None):
         super().__init__(optimizer, config, init_state_fn)
         self.is_stub_optimizer = False
-        # Probed via hasattr by get_grad_stats_parallel_group(); TP/PP are both 1
-        # under polora, so grad-norm reduction needs no extra group.
-        self.grad_stats_parallel_group = None
+        # Deliberately leave `grad_stats_parallel_group` unset: the base class
+        # returns it verbatim when present, and `all_reduce(group=None)` reduces
+        # over WORLD, not over nothing -- which would sum the same DDP-averaged
+        # gradient once per DP rank and inflate the reported grad norm by
+        # sqrt(world_size). Unset, the base falls back to the model-parallel
+        # group, matching what Megatron's own factory assigns to the
+        # non-distributed optimizers; TP/PP are both 1 here, so that group has
+        # size 1 and the reduction is the no-op it should be.
         self.grad_norms_by_group = {}
         device = torch.cuda.current_device() if torch.cuda.is_available() else "cpu"
         self._scale_one = torch.ones(1, dtype=torch.float32, device=device)

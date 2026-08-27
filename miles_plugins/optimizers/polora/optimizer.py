@@ -1,8 +1,8 @@
 """PoLoRA -- spectral-preconditioned LoRA optimizer, ported for Megatron.
 
-Vendored from https://github.com/nikhilgsh/polora (Apache-2.0, see
-LICENSE.upstream). The update math is unchanged; see ``kernels.py`` and the
-upstream module docstring for the derivation. What differs here:
+Vendored from https://github.com/nikhilgsh/polora (Apache-2.0). The update math
+is unchanged; see ``kernels.py`` and the upstream module docstring for the
+derivation. What differs here:
 
   * Pair discovery walks Megatron-Bridge adapters (``.adapter.linear_in`` /
     ``.adapter.linear_out``) rather than PEFT's ``lora_A`` / ``lora_B``. The
