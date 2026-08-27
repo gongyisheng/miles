@@ -1,19 +1,7 @@
 #!/usr/bin/env python3
-"""Numerical equivalence check: miles' vendored polora vs. upstream nikhilgsh/polora.
+"""Compare Miles' Polora kernels and optimizer against upstream.
 
-Clones (or reuses) the upstream repo, then compares, on identical inputs:
-
-  1. kernels      -- ``power_iter_top`` / ``polar_express_gram_batched`` /
-                     ``ns_inv_sqrt`` against upstream's, and against dense
-                     ground truth (SVD / eigh / ``matrix_norm(ord=2)``).
-  2. discovery    -- ``collect_lora_pairs`` on PEFT (``lora_A``/``lora_B``) and
-                     Megatron-Bridge (``linear_in``/``linear_out``) module trees.
-  3. optimizer    -- multi-step training trajectories with identical gradients,
-                     over fp32 and bf16 params, on CPU and CUDA, driving the
-                     miles side through both ``.grad`` and Megatron's
-                     ``main_grad``.
-
-Usage:  python scripts/polora_numerical_diff.py [--upstream DIR] [--steps N]
+Usage: ``python scripts/polora_numerical_diff.py [--upstream DIR] [--steps N]``
 """
 
 from __future__ import annotations
@@ -34,11 +22,8 @@ UPSTREAM_URL = "https://github.com/nikhilgsh/polora"
 FAILURES: list[str] = []
 
 
-# --------------------------------------------------------------------------- #
-# module loading
-# --------------------------------------------------------------------------- #
 def load_upstream(upstream_dir: Path):
-    """Clones upstream if needed and imports its ``polora`` package standalone."""
+    """Clone upstream if needed and import its ``polora`` package."""
     if not (upstream_dir / "polora" / "optim.py").exists():
         print(f"cloning {UPSTREAM_URL} -> {upstream_dir}")
         subprocess.run(
@@ -69,11 +54,8 @@ def load_upstream(upstream_dir: Path):
     return optim, utils
 
 
-# --------------------------------------------------------------------------- #
-# reporting
-# --------------------------------------------------------------------------- #
 def rel_diff(a: torch.Tensor, b: torch.Tensor) -> tuple[float, float]:
-    """Returns ``(max_abs_diff, max_abs_diff / max|b|)`` in float64."""
+    """Return absolute and relative maximum differences in float64."""
     a64, b64 = a.detach().double(), b.detach().double()
     max_abs = (a64 - b64).abs().max().item() if a64.numel() else 0.0
     scale = b64.abs().max().item() if b64.numel() else 0.0
@@ -81,7 +63,7 @@ def rel_diff(a: torch.Tensor, b: torch.Tensor) -> tuple[float, float]:
 
 
 def report(label: str, a: torch.Tensor, b: torch.Tensor, tol: float = 0.0, kind: str = "abs") -> None:
-    """Prints one comparison row and records a failure if it exceeds ``tol``."""
+    """Print a comparison and record failures."""
     max_abs, rel = rel_diff(a, b)
     metric = max_abs if kind == "abs" else rel
     ok = metric <= tol
@@ -98,14 +80,10 @@ def report_bool(label: str, ok: bool, detail: str = "") -> None:
         FAILURES.append(f"{label}: {detail}")
 
 
-# --------------------------------------------------------------------------- #
-# 1. kernels
-# --------------------------------------------------------------------------- #
 def check_kernels(mine, up, device: str) -> None:
     print(f"\n== kernels vs upstream ({device}) ==")
     g = torch.Generator(device="cpu").manual_seed(0)
 
-    # (batch, m, n): wide, tall, square, rank-deficient, and a scale-extreme case.
     shapes = [(3, 8, 64), (3, 64, 8), (2, 16, 16), (4, 4, 128)]
     for b, m, n in shapes:
         X = torch.randn(b, m, n, generator=g).to(device)
@@ -116,14 +94,14 @@ def check_kernels(mine, up, device: str) -> None:
                 up.polar_express_gram_batched(X, nsteps=nsteps),
             )
 
-    # Degenerate inputs: zero matrix, rank-1, huge/tiny scale.
     X0 = torch.zeros(2, 8, 32, device=device)
     v = torch.randn(2, 8, 1, generator=g).to(device)
     X1 = v @ torch.randn(2, 1, 32, generator=g).to(device)
     for name, X in [("zeros", X0), ("rank1", X1), ("1e8*randn", torch.randn(2, 8, 32, generator=g).to(device) * 1e8)]:
-        report(f"polar_express degenerate[{name}]", mine.polar_express_gram_batched(X), up.polar_express_gram_batched(X))
+        report(
+            f"polar_express degenerate[{name}]", mine.polar_express_gram_batched(X), up.polar_express_gram_batched(X)
+        )
 
-    # SPD inputs for the inverse square root.
     for b, r in [(3, 8), (2, 16), (1, 4)]:
         F = torch.randn(b, r, r + 4, generator=g).to(device)
         S = F @ F.transpose(-2, -1)
@@ -151,7 +129,7 @@ def check_kernels(mine, up, device: str) -> None:
 
 
 def check_kernels_vs_dense(mine, device: str) -> None:
-    """Accuracy of the eigh-free kernels against dense linear algebra."""
+    """Compare the iterative kernels with dense linear algebra."""
     print(f"\n== kernels vs dense ground truth ({device}) ==")
     g = torch.Generator(device="cpu").manual_seed(1)
 
@@ -173,9 +151,7 @@ def check_kernels_vs_dense(mine, device: str) -> None:
         got = mine.ns_inv_sqrt(S.float(), nsteps=8, eps=1e-4, eps_relative=True)
         report(f"ns_inv_sqrt({b},{r}) vs eigh", got.double(), ref, tol=5e-2, kind="rel")
 
-    # 8 power iterations on a clustered Gaussian spectrum land a few percent under
-    # sigma_max; that is inherent to the algorithm (upstream included). What must
-    # hold is that the estimate is a *lower* bound and reasonably tight.
+    # Power iteration estimates sigma_max from below.
     for b, m, n in [(3, 8, 64), (2, 16, 16)]:
         M = torch.randn(b, m, n, generator=g).to(device)
         s, _ = mine.power_iter_top(M)
@@ -186,7 +162,6 @@ def check_kernels_vs_dense(mine, device: str) -> None:
             bool((err >= -1e-6).all() and (err <= 5e-2).all()),
             f"relative shortfall per batch = {[f'{e:.2e}' for e in err.tolist()]}",
         )
-        # Warm-started, it converges further -- the optimizer reuses v across steps.
         v = None
         for _ in range(4):
             s_warm, v = mine.power_iter_top(M, v_init=v)
@@ -197,11 +172,8 @@ def check_kernels_vs_dense(mine, device: str) -> None:
         )
 
 
-# --------------------------------------------------------------------------- #
-# 2 & 3. toy models + optimizer trajectories
-# --------------------------------------------------------------------------- #
 class PeftLike(nn.Module):
-    """Upstream-shaped adapter: ``lora_A``/``lora_B`` as PEFT ModuleDicts."""
+    """Adapter shaped like a PEFT LoRA layer."""
 
     def __init__(self, r, d_in, d_out, dtype):
         super().__init__()
@@ -210,7 +182,7 @@ class PeftLike(nn.Module):
 
 
 class BridgeLike(nn.Module):
-    """Megatron-Bridge-shaped adapter: ``adapter.linear_in``/``linear_out``."""
+    """Adapter shaped like a Megatron-Bridge LoRA layer."""
 
     def __init__(self, r, d_in, d_out, dtype):
         super().__init__()
@@ -219,7 +191,7 @@ class BridgeLike(nn.Module):
 
 
 def build_models(shapes, dtype, device, seed=0):
-    """Two structurally different module trees holding identical weights."""
+    """Build PEFT- and Bridge-shaped models with identical weights."""
     torch.manual_seed(seed)
     peft = nn.ModuleList([PeftLike(r, d_in, d_out, dtype) for r, d_in, d_out in shapes]).to(device)
     bridge = nn.ModuleList([BridgeLike(r, d_in, d_out, dtype) for r, d_in, d_out in shapes]).to(device)
@@ -260,7 +232,6 @@ def check_discovery(mine, up, device) -> None:
         f"{[(tuple(a.shape), tuple(b.shape)) for a, b in mine_bridge]}",
     )
 
-    # Frozen pairs are skipped on both sides.
     bridge[0].linear_in.weight.requires_grad_(False)
     peft[0].lora_A["default"].weight.requires_grad_(False)
     report_bool(
@@ -271,10 +242,9 @@ def check_discovery(mine, up, device) -> None:
 
 
 def check_trajectory(mine, up, device, dtype, steps, grad_source, seed=0) -> None:
-    """Runs both optimizers for ``steps`` steps on identical gradients."""
+    """Run both optimizers on identical gradients."""
     label = f"{device}/{dtype_name(dtype)}/grads-via-{grad_source}"
     print(f"\n== optimizer trajectory: {label} ({steps} steps) ==")
-    # Mixed shape groups: two pairs share a group, the others do not.
     shapes = [(8, 64, 32), (8, 64, 32), (4, 32, 96), (16, 128, 128)]
     peft, bridge = build_models(shapes, dtype, device, seed=seed)
 
@@ -306,7 +276,6 @@ def check_trajectory(mine, up, device, dtype, steps, grad_source, seed=0) -> Non
                 if step == steps - 1:
                     report(f"step {step + 1} pair{i} {nm} weight", t_m, t_u)
 
-        # Optimizer state must track too, or later steps would drift.
         if step == steps - 1:
             for i, ((A_u, _), (A_m, _)) in enumerate(zip(up_pairs, mine_pairs, strict=True)):
                 su, sm = opt_up.pair_state[i], opt_mine.state[A_m]
@@ -315,7 +284,6 @@ def check_trajectory(mine, up, device, dtype, steps, grad_source, seed=0) -> Non
 
     report_bool(f"trajectory {label}: worst weight deviation over all steps", worst == 0.0, f"max_abs={worst:.3e}")
 
-    # Every pair must actually have moved, or "identical" is vacuous.
     moves = [max(rel_diff(A, A0)[0], rel_diff(B, B0)[0]) for (A, B), (A0, B0) in zip(mine_pairs, init_w, strict=True)]
     report_bool(
         "every pair actually moved (comparison is non-vacuous)",
@@ -325,7 +293,7 @@ def check_trajectory(mine, up, device, dtype, steps, grad_source, seed=0) -> Non
 
 
 def check_state_dict_roundtrip(mine, device) -> None:
-    """miles adds fp32-preserving load_state_dict; check resume reproduces the trajectory."""
+    """Check that fp32 state survives a save and resume."""
     print("\n== miles state_dict/load_state_dict resume (bf16 params) ==")
     shapes = [(8, 64, 32), (4, 32, 96)]
     _, bridge_a = build_models(shapes, torch.bfloat16, device, seed=3)
@@ -337,7 +305,9 @@ def check_state_dict_roundtrip(mine, device) -> None:
 
     def run(pairs, opt, steps, offset=0):
         for s in range(steps):
-            for (A, B), (gA, gB) in zip(pairs, make_grads(pairs, torch.bfloat16, device, 500 + offset + s), strict=True):
+            for (A, B), (gA, gB) in zip(
+                pairs, make_grads(pairs, torch.bfloat16, device, 500 + offset + s), strict=True
+            ):
                 A.grad, B.grad = gA.clone(), gB.clone()
             opt.step()
 
@@ -348,7 +318,10 @@ def check_state_dict_roundtrip(mine, device) -> None:
     opt_c = mine.Polora(pairs=pairs_b, lr=3e-4)
     opt_c.load_state_dict(sd)
     dtypes = {
-        k: v.dtype for st in opt_c.state.values() for k, v in st.items() if torch.is_tensor(v) and v.is_floating_point()
+        k: v.dtype
+        for st in opt_c.state.values()
+        for k, v in st.items()
+        if torch.is_tensor(v) and v.is_floating_point()
     }
     report_bool("restored state stays fp32 under bf16 params", set(dtypes.values()) == {torch.float32}, str(dtypes))
 
@@ -363,7 +336,6 @@ def dtype_name(dt):
     return str(dt).replace("torch.", "")
 
 
-# --------------------------------------------------------------------------- #
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--upstream", default="/tmp/polora_upstream", type=Path)

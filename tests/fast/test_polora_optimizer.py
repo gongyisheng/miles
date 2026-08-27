@@ -1,10 +1,4 @@
-"""Unit tests for the vendored polora optimizer (miles_plugins/optimizers/polora).
-
-These cover the miles-specific deviations from upstream -- Megatron ``main_grad``
-gradients, fp32 state under bf16 params, state_dict round-trip for LoRA resume,
-and gradient ownership -- rather than re-deriving the update math, which is
-vendored verbatim in ``kernels.py``.
-"""
+"""Tests for the Polora optimizer's Miles integration."""
 
 import pytest
 import torch
@@ -13,7 +7,7 @@ from miles_plugins.optimizers.polora import Polora, collect_lora_pairs
 
 
 def _make_pairs(shapes=((8, 32, 16),), dtype=torch.float32):
-    """Builds ``(A, B)`` leaf parameters for ``(r, d_in, d_out)`` triples."""
+    """Build ``(A, B)`` parameters for ``(r, d_in, d_out)`` shapes."""
     pairs = []
     for r, d_in, d_out in shapes:
         A = torch.nn.Parameter(torch.randn(r, d_in, dtype=dtype) * 0.02)
@@ -31,7 +25,6 @@ def _set_grads(pairs, attr="grad", seed=0):
 
 class TestGradientSource:
     def test_reads_megatron_main_grad_when_grad_is_none(self):
-        """Megatron DDP populates main_grad and leaves .grad as None."""
         torch.manual_seed(0)
         pairs = _make_pairs()
         _set_grads(pairs, attr="main_grad")
@@ -43,7 +36,6 @@ class TestGradientSource:
         assert not torch.equal(pairs[0][0].detach(), before[0])
 
     def test_step_does_not_zero_gradients(self):
-        """Megatron owns the grad lifecycle via optimizer.zero_grad()."""
         torch.manual_seed(0)
         pairs = _make_pairs()
         _set_grads(pairs, attr="main_grad")
@@ -73,7 +65,6 @@ class TestStatePrecision:
             assert state[key].dtype is torch.float32, key
 
     def test_state_dict_round_trip_keeps_fp32(self):
-        """torch's base load_state_dict casts state to the param dtype; we undo that."""
         torch.manual_seed(0)
         pairs = _make_pairs(dtype=torch.bfloat16)
         _set_grads(pairs, attr="main_grad")
@@ -113,7 +104,6 @@ class TestUpdate:
         assert final < initial
 
     def test_shape_groups_batch_independently(self):
-        """Pairs of differing shapes take separate batched paths and all update."""
         torch.manual_seed(0)
         pairs = _make_pairs(((8, 32, 16), (4, 16, 8), (8, 32, 16)))
         _set_grads(pairs, attr="main_grad")
@@ -131,8 +121,6 @@ class TestUpdate:
 
 
 class _PeftLoraLinear(torch.nn.Module):
-    """PEFT's LoraLayer shape: lora_A / lora_B ModuleDicts keyed by adapter name."""
-
     def __init__(self, r, d_in, d_out, adapters=("default",)):
         super().__init__()
         self.weight = torch.nn.Parameter(torch.zeros(d_out, d_in))
@@ -240,13 +228,7 @@ class TestMegatronAdapter:
         return PoloraMegatronOptimizer(Polora(pairs=_make_pairs()), OptimizerConfig())
 
     def test_does_not_shadow_the_grad_stats_parallel_group(self):
-        """``all_reduce(group=None)`` reduces over WORLD, not over nothing.
-
-        Setting the attribute to None would sum the same DDP-averaged gradient
-        once per data-parallel rank, inflating the reported grad norm by
-        ``sqrt(world_size)``. Leaving it unset lets ``MegatronOptimizer`` fall
-        back to the model-parallel group, which is size 1 at TP=PP=1.
-        """
+        """An explicit None would reduce the gradient norm over WORLD."""
         assert not hasattr(self._optimizer(), "grad_stats_parallel_group")
 
     def test_loss_scale_is_one(self):

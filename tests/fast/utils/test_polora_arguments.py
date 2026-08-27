@@ -29,7 +29,6 @@ class TestPoloraValidation:
 
     @pytest.mark.parametrize("optimizer", ["adam", "muon", None])
     def test_other_optimizers_are_untouched(self, optimizer):
-        """Constraints must not leak onto runs that never asked for polora."""
         _validate_polora_args(_args(optimizer=optimizer, lora_rank=0, tensor_model_parallel_size=8))
 
     def test_requires_lora(self):

@@ -1,8 +1,5 @@
 #!/bin/bash
-# Baseline arm: LoRA RL on Qwen3.5-4B with AdamW.
-# Runs on the lower half of the box (GPUs 0-3) so it can share the node with
-# run-polora.sh. Everything except the optimizer and the placement is shared
-# via common.sh.
+# AdamW baseline on GPUs 0-3.
 
 RUN_TAG=adamw
 
@@ -12,7 +9,7 @@ RAY_PORT_OFFSET=0
 
 OPTIMIZER_ARGS=(
    --optimizer adam
-   --lr 1e-5                         # higher LR than full-FT; typical for LoRA
+   --lr 1e-5
    --lr-decay-style constant
    --weight-decay 0.1
    --adam-beta1 0.9

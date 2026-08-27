@@ -1783,9 +1783,7 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
                     "support (e.g. Inkling native LoRA)."
                 ),
             )
-            # Megatron declares --optimizer with a fixed choices list, so "polora"
-            # would be rejected at argparse time. Widen it here rather than
-            # patching the Megatron fork.
+            # Extend Megatron's fixed optimizer choices without patching it.
             for action in parser._actions:
                 if "--optimizer" in action.option_strings:
                     if action.choices is not None and "polora" not in action.choices:
@@ -2886,12 +2884,7 @@ def _validate_rematerialize_param_from_master_weight(args):
 
 
 def _validate_polora_args(args):
-    """Validate the prerequisites for --optimizer polora.
-
-    polora's update is coupled across each whole LoRA ``(A, B)`` pair, so every
-    constraint here exists to guarantee the pair is intact and unsharded on the
-    rank that steps it.
-    """
+    """Validate that each Polora step has complete, unsharded LoRA pairs."""
     if (args.optimizer or "").lower() != "polora":
         return
     assert is_lora_enabled(args), (

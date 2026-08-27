@@ -191,8 +191,7 @@ def _setup_lora_model_via_bridge(args: Namespace) -> list:
         hidden_size = hf_config.text_config.hidden_size if hasattr(hf_config, "text_config") else hf_config.hidden_size
         provider.register_pre_wrap_hook(_make_value_model_hook(hidden_size, provider.sequence_parallel))
 
-    # polora, like muon, is incompatible with the distributed optimizer's flat
-    # sharded buckets -- its update is coupled across each whole (A, B) pair.
+    # Polora needs complete (A, B) pairs rather than sharded buckets.
     _optimizer_name = (args.optimizer or "").lower()
     use_distributed_optimizer = "muon" not in _optimizer_name and _optimizer_name != "polora"
     if is_multi_lora_enabled(args):
