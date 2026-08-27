@@ -92,7 +92,7 @@ ROLLOUT_ARGS=(
    --apply-chat-template
    --rollout-shuffle
    --rm-type deepscaler
-   --num-rollout 5
+   --num-rollout "${NUM_ROLLOUT:-5}"
    --rollout-batch-size 32
    --n-samples-per-prompt 8
    --rollout-max-response-len 16384
