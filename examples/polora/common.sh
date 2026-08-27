@@ -5,9 +5,16 @@
 # between the two arms lives here; each runner only sets OPTIMIZER_ARGS and the
 # wandb group. Do not put optimizer-specific settings in this file.
 #
+# The two arms are sized to run side by side on one 8-GPU box, each on its own
+# 4 GPUs and its own ray cluster, so they can be launched concurrently.
+#
 # Required from the caller before sourcing:
-#   OPTIMIZER_ARGS  - array with the optimizer flags for this arm
-#   RUN_TAG         - short label for this arm, used as the wandb group suffix
+#   OPTIMIZER_ARGS   - array with the optimizer flags for this arm
+#   RUN_TAG          - short label for this arm; wandb group suffix and ray temp dir
+#   TRAIN_GPU_IDS    - comma-separated physical GPU ids for the actor
+#   ROLLOUT_GPU_IDS  - comma-separated physical GPU ids for the sglang engines
+#   RAY_PORT_OFFSET  - integer added to every fixed ray port so the two arms'
+#                      clusters do not collide (0 for one arm, 1 for the other)
 
 set -ex
 
@@ -31,20 +38,56 @@ EVAL_DATA_AIME25=${EVAL_DATA_AIME25:-/root/datasets/aime-2025/aime-2025.jsonl}
 MODEL_NAME=${MODEL_NAME:-qwen3-4B}
 
 # --------------------------------------------------------------------------
-# Cluster
+# Cluster -- disaggregated: training and rollout hold disjoint GPUs, so the
+# actor never sleeps/wakes the sglang engine and the two phases overlap.
+# The runner supplies the ids; this arm sees no other GPU on the box.
 # --------------------------------------------------------------------------
-export GPUS_PER_NODE=${GPUS_PER_NODE:-8}
+: "${TRAIN_GPU_IDS:?set TRAIN_GPU_IDS before sourcing common.sh}"
+: "${ROLLOUT_GPU_IDS:?set ROLLOUT_GPU_IDS before sourcing common.sh}"
+
+# This ordering is what pins the split. miles' _create_placement_group sorts its
+# bundles by (node, gpu id) ascending and hands the actor the first
+# actor_num_gpus of them, rollout the rest (miles/ray/placement_group.py). Ray's
+# gpu ids index into CUDA_VISIBLE_DEVICES, so listing the train devices first
+# puts the actor on TRAIN_GPU_IDS and the sglang engines on ROLLOUT_GPU_IDS --
+# in that order, whatever the physical ids are. The two lists must be disjoint.
+export CUDA_VISIBLE_DEVICES="${TRAIN_GPU_IDS},${ROLLOUT_GPU_IDS}"
+
+IFS=',' read -ra _train_gpu_ids <<< "${TRAIN_GPU_IDS}"
+IFS=',' read -ra _rollout_gpu_ids <<< "${ROLLOUT_GPU_IDS}"
+TRAIN_GPUS=${#_train_gpu_ids[@]}
+ROLLOUT_GPUS=${#_rollout_gpu_ids[@]}
+TOTAL_GPUS=$((TRAIN_GPUS + ROLLOUT_GPUS))
+
+export GPUS_PER_NODE=${TRAIN_GPUS}
 export MASTER_ADDR=${MASTER_ADDR:-127.0.0.1}
 export PYTHONUNBUFFERED=1
 export FLASHINFER_DISABLE_VERSION_CHECK=1
 
-# Clean up any stale processes from a previous run.
-pkill -9 sglang || true
-ray stop --force || true
-sleep 5
-pkill -9 ray || true
-pkill -9 python || true
-sleep 3
+# One ray cluster per arm. Every port ray defaults to a fixed value gets the
+# arm's offset, and each cluster keeps its own temp dir, so two heads coexist on
+# the same node. Ports left at auto (node manager, object manager, worker range)
+# are chosen free and need no offset.
+: "${RAY_PORT_OFFSET:?set RAY_PORT_OFFSET before sourcing common.sh}"
+RAY_GCS_PORT=$((6379 + RAY_PORT_OFFSET))
+RAY_DASHBOARD_PORT=$((8265 + RAY_PORT_OFFSET))
+RAY_AGENT_PORT=$((52365 + RAY_PORT_OFFSET))
+RAY_CLIENT_PORT=$((10001 + RAY_PORT_OFFSET))
+RAY_TEMP_DIR=${RAY_TEMP_DIR:-/tmp/ray-${RUN_TAG}}
+# An inherited RAY_ADDRESS would point this arm's CLI at the other arm's cluster.
+unset RAY_ADDRESS
+
+# No global process cleanup here: `ray stop --force` and `pkill python` are
+# node-wide and would kill the other arm mid-run. Set CLEANUP=1 to reclaim a
+# wedged machine -- that kills BOTH arms.
+if [[ "${CLEANUP:-0}" == "1" ]]; then
+   pkill -9 sglang || true
+   ray stop --force || true
+   sleep 5
+   pkill -9 ray || true
+   pkill -9 python || true
+   sleep 3
+fi
 
 MODEL_ARGS_LINE="$(python3 "${REPO_ROOT}/miles/utils/external_utils/model_args_utils.py" "${MODEL_NAME}")" || exit 1
 read -ra MODEL_ARGS <<< "${MODEL_ARGS_LINE}"
@@ -131,8 +174,11 @@ WANDB_ARGS=(
 )
 
 SGLANG_ARGS=(
+   --rollout-num-gpus "${ROLLOUT_GPUS}"
    --rollout-num-gpus-per-engine 1
-   --sglang-mem-fraction-static 0.6
+   # Rollout GPUs are dedicated in disaggregated mode -- nothing else competes
+   # for their memory, so sglang can take most of it.
+   --sglang-mem-fraction-static 0.8
 )
 
 MISC_ARGS=(
@@ -148,10 +194,17 @@ MISC_ARGS=(
    --seed 42
 )
 
-ray start --head --node-ip-address "${MASTER_ADDR}" --num-gpus "${GPUS_PER_NODE}" \
-   --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
+# ray owns every device in CUDA_VISIBLE_DEVICES; the actor and the rollout
+# engines each claim their share out of that pool.
+ray start --head --node-ip-address "${MASTER_ADDR}" --num-gpus "${TOTAL_GPUS}" \
+   --port "${RAY_GCS_PORT}" \
+   --dashboard-host=0.0.0.0 --dashboard-port="${RAY_DASHBOARD_PORT}" \
+   --dashboard-agent-listen-port "${RAY_AGENT_PORT}" \
+   --ray-client-server-port "${RAY_CLIENT_PORT}" \
+   --temp-dir "${RAY_TEMP_DIR}" \
+   --disable-usage-stats
 
-ray job submit --address="http://127.0.0.1:8265" \
+ray job submit --address="http://127.0.0.1:${RAY_DASHBOARD_PORT}" \
    --runtime-env-json='{
      "env_vars": {
         "PYTHONPATH": "/root/Megatron-LM",
@@ -161,8 +214,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    }' \
    -- python3 train.py \
    --actor-num-nodes 1 \
-   --actor-num-gpus-per-node "${GPUS_PER_NODE}" \
-   --colocate \
+   --actor-num-gpus-per-node "${TRAIN_GPUS}" \
    --calculate-per-token-loss \
    "${MODEL_ARGS[@]}" \
    "${CKPT_ARGS[@]}" \

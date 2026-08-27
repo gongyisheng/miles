@@ -1,8 +1,14 @@
 #!/bin/bash
 # Treatment arm: LoRA RL on Qwen3.5-4B with PoLoRA.
-# Everything except OPTIMIZER_ARGS is shared with run-adamw.sh via common.sh.
+# Runs on the upper half of the box (GPUs 4-7) so it can share the node with
+# run-adamw.sh. Everything except the optimizer and the placement is shared
+# via common.sh.
 
 RUN_TAG=polora
+
+TRAIN_GPU_IDS=4,5
+ROLLOUT_GPU_IDS=6,7
+RAY_PORT_OFFSET=1
 
 OPTIMIZER_ARGS=(
    --optimizer polora
