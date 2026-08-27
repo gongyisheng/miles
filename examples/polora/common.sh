@@ -69,13 +69,13 @@ ROLLOUT_ARGS=(
    --apply-chat-template
    --rollout-shuffle
    --rm-type deepscaler
-   --num-rollout 300
+   --num-rollout 5
    --rollout-batch-size 32
    --n-samples-per-prompt 8
    --rollout-max-response-len 8192
    --rollout-temperature 1
 
-   --global-batch-size 128
+   --global-batch-size 32
    --balance-data
 
    # Left off on purpose: dynamic sampling resamples prompts until the group
