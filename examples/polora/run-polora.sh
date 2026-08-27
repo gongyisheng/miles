@@ -3,8 +3,11 @@
 
 RUN_TAG=polora
 
-TRAIN_GPU_IDS=4,5
-ROLLOUT_GPU_IDS=6,7
+# 1 to log to wandb; needs WANDB_API_KEY in the environment. Keep this in step
+# with run-adamw.sh.
+USE_WANDB=${USE_WANDB:-0}
+
+GPU_IDS=4,5,6,7
 RAY_PORT_OFFSET=1
 
 OPTIMIZER_ARGS=(

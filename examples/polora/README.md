@@ -7,9 +7,9 @@ DAPO-Math-17k, evaluated on AIME 2024 and AIME 2025.
 | --- | --- |
 | Model | `/root/models/Qwen3.5-4B` (see caveat below) |
 | Train data | DAPO-Math-17k, `deepscaler` rule-based reward |
-| Eval data | AIME 2024 + AIME 2025, every 10 rollouts, 8 samples/prompt |
+| Eval data | AIME 2024 + AIME 2025, every 10 rollouts, 1 sample/prompt |
 | Adapter | LoRA rank 32, alpha 32, dropout 0, `all-linear` |
-| Parallelism | disaggregated, 4 GPUs per arm — 2 train + 2 rollout, TP=1 / PP=1 (polora requires both) |
+| Parallelism | colocated, 4 GPUs per arm — train and rollout share all 4, TP=1 / PP=1 (polora requires both) |
 
 ## Run
 
@@ -17,17 +17,25 @@ The two arms split one 8-GPU box and run **at the same time**:
 
 ```bash
 cd /root/miles
-bash examples/polora/run-adamw.sh   &   # GPUs 0,1 train / 2,3 rollout
-bash examples/polora/run-polora.sh  &   # GPUs 4,5 train / 6,7 rollout
+bash examples/polora/run-adamw.sh   &   # GPUs 0-3
+bash examples/polora/run-polora.sh  &   # GPUs 4-7
 wait
 ```
 
-They log to wandb project `miles-polora-vs-adamw`, groups
-`qwen3.5-4b-lora-adamw` and `qwen3.5-4b-lora-polora`.
+`USE_WANDB=1` (in the runner or the environment) logs to wandb project
+`miles-polora-vs-adamw`, groups `qwen3.5-4b-lora-adamw` and
+`qwen3.5-4b-lora-polora`. Credentials come from either an exported
+`WANDB_API_KEY` or a prior `wandb login` (`~/.netrc`) — `common.sh` checks for
+one of the two and refuses to launch otherwise, since `--use-wandb`
+unauthenticated aborts the run before the first rollout. The adamw arm defaults
+to `1`, polora to `0`; set both the same way, or you lose half the comparison.
 
 Neither script kills stray processes, because a node-wide `ray stop --force` or
-`pkill python` would take out the other arm. To reclaim a wedged machine, run
-either script with `CLEANUP=1` — that kills **both** arms.
+`pkill python` would take out the other arm — `ray stop` is node-wide and takes
+no address, so there is no way to stop one arm's head alone. A head left behind
+by a failed attempt is therefore *reused* on the next run of that arm rather
+than restarted. To reclaim a wedged machine, run either script with `CLEANUP=1`
+— that kills **both** arms.
 
 ## Layout
 
@@ -37,39 +45,57 @@ ids and its ray port offset, then sources it. Keep it that way — a config that
 drifts between arms invalidates the comparison.
 
 Overridable via environment: `HF_CHECKPOINT`, `TRAIN_DATA`, `EVAL_DATA_AIME24`,
-`EVAL_DATA_AIME25`, `MODEL_NAME`, `TRAIN_GPU_IDS`, `ROLLOUT_GPU_IDS`,
-`RAY_PORT_OFFSET`, `RAY_TEMP_DIR`, `CLEANUP`.
+`EVAL_DATA_AIME25`, `MODEL_NAME`, `GPU_IDS`, `RAY_PORT_OFFSET`, `RAY_TEMP_DIR`,
+`MEGATRON_PATH`, `USE_WANDB`, `CLEANUP`.
+
+## Requirements
+
+The repo tracks a Megatron-LM pin (`miles-main`, 2026-08-19 or newer) — older
+checkouts fail at import with `No module named
+'megatron.core.tokenizers.utils'`. `MEGATRON_PATH` points at the checkout and
+defaults to `/root/Megatron-LM`.
+
+The job's ray runtime env mirrors what `command_utils.execute_train` builds:
+`NCCL_NVLS_ENABLE` follows an NVLink probe rather than being pinned, since
+forcing `NCCL_ALGO=Ring` would disable NVLS on an NVLink box.
 
 ## Placement
 
 Each arm owns 4 GPUs and sees no others: `CUDA_VISIBLE_DEVICES` is set to
-`${TRAIN_GPU_IDS},${ROLLOUT_GPU_IDS}` before ray starts.
+`${GPU_IDS}` before ray starts.
 
-| Arm | Train | Rollout | ray GCS / dashboard |
-| --- | --- | --- | --- |
-| adamw | 0,1 | 2,3 | 6379 / 8265 |
-| polora | 4,5 | 6,7 | 6380 / 8266 |
+| Arm | GPUs | ray GCS / dashboard |
+| --- | --- | --- |
+| adamw | 0,1,2,3 | 6379 / 8265 |
+| polora | 4,5,6,7 | 6380 / 8266 |
 
-Within an arm the split is disaggregated: training and rollout hold disjoint
-GPUs, there is no `--colocate`, so weights are never offloaded to make room for
-the inference engine, and sglang gets `--sglang-mem-fraction-static 0.8` on its
-dedicated devices.
+Within an arm the split is colocated: `--colocate` puts the sglang engines on
+the same 4 GPUs the actor trains on, so each role gets four devices instead of
+two. Disaggregating them left half the arm idle at any moment, which is what
+made it slow. The cost is that `arguments.py` then defaults `--offload-train`
+and `--offload-rollout` on, so the two swap in and out of HBM between phases,
+and sglang drops to `--sglang-mem-fraction-static 0.4` since it no longer has
+the devices to itself — the value the validated LoRA+colocate recipe in
+`tests/e2e/lora/test_lora_qwen2.5_0.5B.py` uses.
 
-The train/rollout pin comes from the *order* of `CUDA_VISIBLE_DEVICES`.
-`_create_placement_group` in `miles/ray/placement_group.py` sorts its bundles by
-`(node, gpu id)` ascending and gives the actor the first `actor_num_gpus`,
-rollout the remainder; ray's gpu ids index into `CUDA_VISIBLE_DEVICES`, so the
-train devices being listed first is what lands the actor on them. Swap the two
-variables to flip the halves; keep the lists disjoint.
+`--rollout-num-gpus` is not passed: `arguments.py` overrides it to
+`actor_num_gpus_per_node * actor_num_nodes` under colocate.
 
 Each arm also runs its own ray head. `RAY_PORT_OFFSET` (0 and 1) shifts every
 port ray defaults to a fixed value — GCS, dashboard, dashboard agent, client
 server — and each cluster gets its own `--temp-dir` (`/tmp/ray-<tag>`). Ports ray
 picks automatically need no offset.
 
-To run one arm alone on all 8 GPUs, colocated instead: set
-`TRAIN_GPU_IDS=0,1,2,3,4,5,6,7`, drop `--rollout-num-gpus` (ignored under
-colocate), add `--colocate`, and lower the memory fraction.
+The sglang engine ports are not covered by `RAY_PORT_OFFSET`.
+`allocate_rollout_engine_addr_and_ports_normal` scans upward from a hardcoded
+`base_port=15000` for the first free port, and nothing exposes that base as a
+flag, so two arms that reach engine startup at the same moment can each be
+handed the same port before either binds it. The window is narrow — port
+allocation happens minutes into startup, well after launch — but if an arm dies
+with a bind error on a 15xxx port, stagger the two launches instead of starting
+them in the same instant.
+
+To run one arm alone on all 8 GPUs, set `GPU_IDS=0,1,2,3,4,5,6,7`.
 
 ## Checkpoint caveat
 
