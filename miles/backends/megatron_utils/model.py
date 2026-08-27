@@ -122,6 +122,10 @@ def _is_muon_optimizer(optimizer: str | None) -> bool:
     return optimizer is not None and "muon" in optimizer.lower()
 
 
+def _is_polora_optimizer(optimizer: str | None) -> bool:
+    return optimizer is not None and optimizer.lower() == "polora"
+
+
 def setup_model_and_optimizer(
     args: Namespace,
     role: str = "actor",
@@ -190,6 +194,10 @@ def setup_model_and_optimizer(
             use_gloo_process_groups=args.use_gloo_process_groups,
             layer_wise_distributed_optimizer="dist" in config.optimizer.lower(),
         )
+    elif _is_polora_optimizer(config.optimizer):
+        from miles_plugins.optimizers.polora.megatron_adapter import build_polora_optimizer
+
+        optimizer = build_polora_optimizer(args, config, model)
     elif is_multi_lora_enabled(args):
         from miles.backends.megatron_utils.multi_lora_optimizer import build_multi_lora_optimizer
 

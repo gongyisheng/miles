@@ -1783,6 +1783,44 @@ def get_miles_extra_args_provider(add_custom_arguments=None):
                     "support (e.g. Inkling native LoRA)."
                 ),
             )
+            # Megatron declares --optimizer with a fixed choices list, so "polora"
+            # would be rejected at argparse time. Widen it here rather than
+            # patching the Megatron fork.
+            for action in parser._actions:
+                if "--optimizer" in action.option_strings:
+                    if action.choices is not None and "polora" not in action.choices:
+                        action.choices = list(action.choices) + ["polora"]
+                    break
+            parser.add_argument(
+                "--polora-beta1",
+                type=float,
+                default=0.9,
+                help="polora momentum coefficient (default: 0.9). Only used with --optimizer polora.",
+            )
+            parser.add_argument(
+                "--polora-curvature-beta",
+                type=float,
+                default=0.99,
+                help="polora EMA coefficient for the diagonal preconditioners Q/P (default: 0.99).",
+            )
+            parser.add_argument(
+                "--polora-ns-steps",
+                type=int,
+                default=8,
+                help="polora PolarExpress matrix-sign solver iterations (default: 8).",
+            )
+            parser.add_argument(
+                "--polora-higham-iters",
+                type=int,
+                default=8,
+                help="polora Newton-Schulz iterations for the C_A/C_B inverse square roots (default: 8).",
+            )
+            parser.add_argument(
+                "--polora-compile",
+                action="store_true",
+                default=False,
+                help="torch.compile polora's two spectral kernels. Update is unchanged.",
+            )
             parser.add_argument(
                 "--experts-shared-outer-loras",
                 action="store_true",
@@ -2847,6 +2885,46 @@ def _validate_rematerialize_param_from_master_weight(args):
         args.check_rematerialize_param_from_master_weight = True
 
 
+def _validate_polora_args(args):
+    """Validate the prerequisites for --optimizer polora.
+
+    polora's update is coupled across each whole LoRA ``(A, B)`` pair, so every
+    constraint here exists to guarantee the pair is intact and unsharded on the
+    rank that steps it.
+    """
+    if (args.optimizer or "").lower() != "polora":
+        return
+    assert is_lora_enabled(args), (
+        "--optimizer polora optimizes LoRA (A, B) adapter pairs and has nothing to step "
+        "without them; set --lora-rank > 0"
+    )
+    assert not args.multi_lora, (
+        "--optimizer polora does not support multi-LoRA: multi-LoRA builds its own per-slot "
+        "chained optimizers in multi_lora_optimizer.py with Adam semantics"
+    )
+    assert args.tensor_model_parallel_size == 1, (
+        "--optimizer polora requires --tensor-model-parallel-size 1: C_A contracts over d_in "
+        "and C_B over d_out, the dims TP shards, so a sharded run would orthogonalize each "
+        f"shard independently rather than the whole factor; got {args.tensor_model_parallel_size}"
+    )
+    assert args.pipeline_model_parallel_size == 1, (
+        "--optimizer polora requires --pipeline-model-parallel-size 1; got " f"{args.pipeline_model_parallel_size}"
+    )
+    assert not args.fp16, "--optimizer polora requires bf16: its state is fp32 and it uses no loss scaler"
+    assert not args.reset_optimizer_states, (
+        "--reset-optimizer-states walks optimizer.chained_optimizers, which polora does not "
+        "expose (it is not a ChainedOptimizer -- chaining would re-enable the per-child "
+        "gradient clipping polora deliberately skips)"
+    )
+    assert not args.optimizer_cpu_offload, (
+        "--optimizer polora does not support --optimizer-cpu-offload: it keeps no master params "
+        "for the offloader to hold"
+    )
+    assert not args.use_precision_aware_optimizer, (
+        "--optimizer polora does not support --use-precision-aware-optimizer: its state dtypes " "are fixed at fp32"
+    )
+
+
 def miles_validate_args(args):
     validate_dashboard_args(args)
 
@@ -3362,6 +3440,8 @@ def miles_validate_args(args):
             f"Train offload target=disk, dir={args.offload_train_disk_dir}, "
             f"chunk={args.offload_train_disk_chunk_mb}MB"
         )
+
+    _validate_polora_args(args)
 
     if args.stream_optimizer_state_to_disk:
         assert args.offload_train_target == "disk" or not args.offload_train, (
