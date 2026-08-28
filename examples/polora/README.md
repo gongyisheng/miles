@@ -47,7 +47,7 @@ drifts between arms invalidates the comparison.
 Overridable via environment: `HF_CHECKPOINT`, `TRAIN_DATA`, `EVAL_DATA_AIME24`,
 `EVAL_DATA_AIME25`, `MODEL_NAME`, `GPU_IDS`, `RAY_PORT_OFFSET`, `RAY_TEMP_DIR`,
 `MEGATRON_PATH`, `USE_WANDB`, `CLEANUP`, `NUM_ROLLOUT`,
-`SKIP_EVAL_BEFORE_TRAIN`.
+`SKIP_EVAL_BEFORE_TRAIN`, `OFFLOAD_TRAIN`, `SGLANG_MEM_FRACTION_STATIC`.
 
 ## Requirements
 
@@ -73,11 +73,24 @@ Each arm owns 4 GPUs and sees no others: `CUDA_VISIBLE_DEVICES` is set to
 Within an arm the split is colocated: `--colocate` puts the sglang engines on
 the same 4 GPUs the actor trains on, so each role gets four devices instead of
 two. Disaggregating them left half the arm idle at any moment, which is what
-made it slow. The cost is that `arguments.py` then defaults `--offload-train`
-and `--offload-rollout` on, so the two swap in and out of HBM between phases,
-and sglang drops to `--sglang-mem-fraction-static 0.4` since it no longer has
-the devices to itself — the value the validated LoRA+colocate recipe in
-`tests/e2e/lora/test_lora_qwen2.5_0.5B.py` uses.
+made it slow. `arguments.py` then defaults `--offload-train` and
+`--offload-rollout` on, so the two swap in and out of HBM between phases and
+whichever side is running has the device nearly to itself.
+
+`--offload-train` is the one setting that differs between the arms, because
+polora cannot use it — see the comment in `common.sh`: the trainer's
+`pause(tag="default")` unmaps the LoRA adapter params, since Megatron only
+re-maps them into the survivable `param_buffer` region when the distributed
+optimizer is on, and miles turns that off for every non-Adam optimizer. The
+first `update_weights` then dies with an illegal memory access.
+
+| Arm | `--offload-train` | `--sglang-mem-fraction-static` |
+| --- | --- | --- |
+| adamw | on (colocate default) | 0.8 — the trainer is out of HBM while the engines generate |
+| polora | off (`--no-offload-train`) | 0.4 — the trainer stays resident the whole run; the value the validated LoRA+colocate recipe in `tests/e2e/lora/test_lora_qwen2.5_0.5B.py` uses |
+
+`common.sh` picks the row by looking for `polora` in `OPTIMIZER_ARGS`. Force
+either one with `OFFLOAD_TRAIN=0/1` and `SGLANG_MEM_FRACTION_STATIC`.
 
 `--rollout-num-gpus` is not passed: `arguments.py` overrides it to
 `actor_num_gpus_per_node * actor_num_nodes` under colocate.
@@ -116,8 +129,12 @@ actually on disk. Once a genuine Qwen3.5-4B checkpoint is downloaded, run with
   reading anything into a single pair of curves.
 - polora applies no weight decay; AdamW here uses `0.1`. If you want to isolate
   the preconditioner, set AdamW's `--weight-decay 0.0` too.
-- Dynamic sampling is commented out in `common.sh` on purpose: it would give the
-  two arms different training data. Enable it on both or neither.
+- DAPO dynamic sampling is on for both arms (`--over-sampling-batch-size 64`
+  plus `check_reward_nonzero_std`). The keep/drop decision reads the rewards,
+  which diverge after the first step, so from then on the arms consume different
+  prompts and a step-N-vs-step-N *train* reward is no longer matched. The AIME
+  evals run on fixed data and stay a fair head-to-head. Enable it on both arms
+  or neither.
 - polora rejects TP>1, PP>1, multi-LoRA, fp16, `--optimizer-cpu-offload`, and
   `--use-precision-aware-optimizer` (see `_validate_polora_args` in
   `miles/utils/arguments.py`). The distributed optimizer is disabled

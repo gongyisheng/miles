@@ -101,9 +101,16 @@ ROLLOUT_ARGS=(
    --global-batch-size 256
    --balance-data
 
-   # Dynamic sampling would give the two arms different prompts.
-   # --over-sampling-batch-size 64
-   # --dynamic-sampling-filter-path miles.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std
+   # DAPO dynamic sampling: draw prompts 64 at a time and drop any group whose 8
+   # samples are all-correct or all-wrong, since those carry zero advantage.
+   # arguments.py asserts over_sampling_batch_size >= rollout_batch_size.
+   #
+   # The keep/drop decision reads the rewards, which diverge between the arms
+   # after the first step, so from then on the arms consume different prompts and
+   # a step-N-vs-step-N train reward is no longer a matched comparison. The AIME
+   # evals run on fixed data and stay a fair head-to-head.
+   --over-sampling-batch-size 64
+   --dynamic-sampling-filter-path miles.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std
 )
 
 EVAL_ARGS=(
@@ -112,7 +119,10 @@ EVAL_ARGS=(
       aime24 "${EVAL_DATA_AIME24}"
       aime25 "${EVAL_DATA_AIME25}"
    --n-samples-per-eval-prompt 1
-   --eval-max-response-len 16384
+   # AIME answers are long; 16384 truncated a visible share of them. 32768 plus
+   # an AIME prompt still fits the checkpoint's 40960 max_position_embeddings,
+   # so no --eval-max-context-len bump is needed.
+   --eval-max-response-len 32768
    --eval-top-k 1
 )
 
@@ -136,7 +146,7 @@ PERF_ARGS=(
    --recompute-num-layers 1
 
    --use-dynamic-batch-size
-   --max-tokens-per-gpu 16384
+   --max-tokens-per-gpu 32768
 )
 
 GRPO_ARGS=(
@@ -179,6 +189,40 @@ else
    WANDB_ARGS=()
 fi
 
+# --colocate defaults offload_train on, which is what we want: swapping the
+# trainer out of HBM during generation is what lets the engines take 0.8.
+#
+# polora cannot do it. The trainer's pause(tag="default") unmaps the LoRA
+# adapter params -- Megatron only re-maps them into the survivable
+# "param_buffer" region when the distributed optimizer is on
+# (param_and_grad_buffer.py builds self.param_data under
+# `if use_distributed_optimizer`), and miles turns that off for every non-Adam
+# optimizer (bridge_lora_helpers.py). The first update_weights then reads
+# unmapped memory and dies with an illegal memory access. So that arm keeps the
+# trainer resident for the whole run, and pays for it with a memory fraction the
+# trainer can live beside: 0.4, the value the validated LoRA+colocate recipe in
+# tests/e2e/lora/test_lora_qwen2.5_0.5B.py uses.
+#
+# This is the one setting that legitimately differs between the arms. Override
+# with OFFLOAD_TRAIN=0/1, and SGLANG_MEM_FRACTION_STATIC, to force either way.
+if [[ -z "${OFFLOAD_TRAIN:-}" ]]; then
+   if [[ " ${OPTIMIZER_ARGS[*]} " == *" polora "* ]]; then
+      OFFLOAD_TRAIN=0
+   else
+      OFFLOAD_TRAIN=1
+   fi
+fi
+
+if [[ "${OFFLOAD_TRAIN}" == "1" ]]; then
+   # 0.8 rather than higher: torch_memory_saver's pause releases only sglang's
+   # own regions, so the remaining ~20% has to absorb whatever the trainer and
+   # NCCL keep mapped across the phase switch.
+   SGLANG_MEM_FRACTION_STATIC=${SGLANG_MEM_FRACTION_STATIC:-0.8}
+else
+   SGLANG_MEM_FRACTION_STATIC=${SGLANG_MEM_FRACTION_STATIC:-0.4}
+fi
+echo "Arm '${RUN_TAG}': offload_train=${OFFLOAD_TRAIN}, sglang-mem-fraction-static=${SGLANG_MEM_FRACTION_STATIC}"
+
 SGLANG_ARGS=(
    # An arm sees only its own slice of the box, so the node size the rollout
    # side should assume is TOTAL_GPUS, not the 8 this flag defaults to.
@@ -187,22 +231,11 @@ SGLANG_ARGS=(
    # arguments.py overrides it to the actor's GPU count under colocate.
    --colocate
    --rollout-num-gpus-per-engine 1
-   # The engines now share memory with the trainer, so they cannot take 0.8.
-   # 0.4 is what the validated LoRA+colocate recipe uses
-   # (tests/e2e/lora/test_lora_qwen2.5_0.5B.py).
-   --sglang-mem-fraction-static 0.4
-
-   # Required for polora, and set on both arms so the comparison stays honest.
-   # --colocate would otherwise default offload_train on, and the trainer's
-   # pause(tag="default") unmaps the LoRA adapter params: Megatron only keeps
-   # them in the survivable "param_buffer" region when the distributed
-   # optimizer is on (param_and_grad_buffer.py), and miles turns that off for
-   # every non-Adam optimizer. The first update_weights then reads unmapped
-   # memory and dies with an illegal memory access. Keeping the trainer
-   # resident is affordable here: 4B bf16 + adapter state alongside sglang's
-   # 0.4 fits an H200 with room to spare.
-   --no-offload-train
+   --sglang-mem-fraction-static "${SGLANG_MEM_FRACTION_STATIC}"
 )
+if [[ "${OFFLOAD_TRAIN}" != "1" ]]; then
+   SGLANG_ARGS+=(--no-offload-train)
+fi
 
 MISC_ARGS=(
    --attention-dropout 0.0
