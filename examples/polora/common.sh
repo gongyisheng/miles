@@ -189,39 +189,22 @@ else
    WANDB_ARGS=()
 fi
 
-# --colocate defaults offload_train on, which is what we want: swapping the
-# trainer out of HBM during generation is what lets the engines take 0.8.
+# --colocate defaults offload_train on, but neither arm uses it: the trainer
+# stays resident in HBM for the whole run so both arms are configured
+# identically.
 #
-# polora cannot do it. The trainer's pause(tag="default") unmaps the LoRA
-# adapter params -- Megatron only re-maps them into the survivable
+# polora cannot offload at all. The trainer's pause(tag="default") unmaps the
+# LoRA adapter params -- Megatron only re-maps them into the survivable
 # "param_buffer" region when the distributed optimizer is on
 # (param_and_grad_buffer.py builds self.param_data under
 # `if use_distributed_optimizer`), and miles turns that off for every non-Adam
 # optimizer (bridge_lora_helpers.py). The first update_weights then reads
-# unmapped memory and dies with an illegal memory access. So that arm keeps the
-# trainer resident for the whole run, and pays for it with a memory fraction the
-# trainer can live beside: 0.4, the value the validated LoRA+colocate recipe in
-# tests/e2e/lora/test_lora_qwen2.5_0.5B.py uses.
+# unmapped memory and dies with an illegal memory access.
 #
-# This is the one setting that legitimately differs between the arms. Override
-# with OFFLOAD_TRAIN=0/1, and SGLANG_MEM_FRACTION_STATIC, to force either way.
-if [[ -z "${OFFLOAD_TRAIN:-}" ]]; then
-   if [[ " ${OPTIMIZER_ARGS[*]} " == *" polora "* ]]; then
-      OFFLOAD_TRAIN=0
-   else
-      OFFLOAD_TRAIN=1
-   fi
-fi
-
-if [[ "${OFFLOAD_TRAIN}" == "1" ]]; then
-   # 0.8 rather than higher: torch_memory_saver's pause releases only sglang's
-   # own regions, so the remaining ~20% has to absorb whatever the trainer and
-   # NCCL keep mapped across the phase switch.
-   SGLANG_MEM_FRACTION_STATIC=${SGLANG_MEM_FRACTION_STATIC:-0.8}
-else
-   SGLANG_MEM_FRACTION_STATIC=${SGLANG_MEM_FRACTION_STATIC:-0.4}
-fi
-echo "Arm '${RUN_TAG}': offload_train=${OFFLOAD_TRAIN}, sglang-mem-fraction-static=${SGLANG_MEM_FRACTION_STATIC}"
+# Override SGLANG_MEM_FRACTION_STATIC if the engines and the resident trainer
+# do not fit together at 0.8.
+SGLANG_MEM_FRACTION_STATIC=${SGLANG_MEM_FRACTION_STATIC:-0.8}
+echo "Arm '${RUN_TAG}': offload_train=0, sglang-mem-fraction-static=${SGLANG_MEM_FRACTION_STATIC}"
 
 SGLANG_ARGS=(
    # An arm sees only its own slice of the box, so the node size the rollout
@@ -232,10 +215,8 @@ SGLANG_ARGS=(
    --colocate
    --rollout-num-gpus-per-engine 1
    --sglang-mem-fraction-static "${SGLANG_MEM_FRACTION_STATIC}"
+   --no-offload-train
 )
-if [[ "${OFFLOAD_TRAIN}" != "1" ]]; then
-   SGLANG_ARGS+=(--no-offload-train)
-fi
 
 MISC_ARGS=(
    --attention-dropout 0.0
