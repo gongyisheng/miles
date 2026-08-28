@@ -2,6 +2,7 @@
 # AdamW baseline on GPUs 0-3.
 
 RUN_TAG=adamw
+NUM_ROLLOUT=100
 
 # 1 to log to wandb; needs credentials on the box (see common.sh). Keep this in
 # step with run-polora.sh.
