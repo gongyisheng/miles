@@ -22,7 +22,6 @@ OPTIMIZER_ARGS=(
    --polora-curvature-beta 0.99
    --polora-ns-steps 8
    --polora-higham-iters 8
-   # --polora-compile
 )
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
