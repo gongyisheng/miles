@@ -2,6 +2,8 @@
 # Polora treatment on GPUs 4-7.
 
 RUN_TAG=polora
+NUM_ROLLOUT=100
+USE_WANDB=1
 
 # 1 to log to wandb; needs WANDB_API_KEY in the environment. Keep this in step
 # with run-adamw.sh.
