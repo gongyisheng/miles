@@ -6,7 +6,7 @@ NUM_EPOCH=1
 
 # 1 to log to wandb; needs credentials on the box (see sft_common.sh). Keep this
 # in step with sft_run_polora.sh.
-USE_WANDB=${USE_WANDB:-1}
+USE_WANDB=1
 
 GPU_IDS=0,1,2,3
 RAY_PORT_OFFSET=0
