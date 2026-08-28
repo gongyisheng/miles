@@ -152,7 +152,7 @@ SGLANG_ARGS=(
    --num-gpus-per-node "${TOTAL_GPUS}"
    --colocate
    --rollout-num-gpus-per-engine 1
-   --sglang-mem-fraction-static 0.8
+   --sglang-mem-fraction-static 0.9
 )
 
 MISC_ARGS=(
