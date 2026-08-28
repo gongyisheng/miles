@@ -27,7 +27,7 @@ the optimizer configurations differ.
 Training used the `polora` branch of a
 [forked Miles repository](https://github.com/gongyisheng/miles) at commit
 `b3c94ca9`, together with Megatron Core 0.16.0rc0 at commit `235952df6`. All
-runs used CUDA 13.0.
+runs used CUDA 13.0 and seed 42.
 
 ### Model
 
@@ -73,10 +73,11 @@ top-k 1 decoding.
   observes that PoLoRA's optimal learning rate is 20–100 times that of AdamW
   and that PoLoRA is less sensitive to the choice of learning rate. For our RL
   experiments, we therefore started at the lower end of this range by setting
-  PoLoRA's learning rate to 20 times that of AdamW. We verified that this
-  learning rate produced a healthy gradient norm comparable to AdamW's. We use
-  8 PolarExpress matrix-sign iterations and 8 inverse-square-root iterations
-  for the spectral updates.
+  PoLoRA's learning rate to 20 times that of AdamW. The runs produced similar
+  raw gradient norms, but this does not establish that the optimizers take
+  updates of equivalent magnitude because AdamW and PoLoRA transform gradients
+  differently. We use 8 PolarExpress matrix-sign iterations and 8
+  inverse-square-root iterations for the spectral updates.
 
 ### Hardware
 
@@ -90,8 +91,8 @@ Each experiment was run on four NVIDIA H200 GPUs
 | --- | ---: | ---: |
 | Mean rollout reward (steps 20–24) | 0.797 | 0.794 |
 | Mean rollout truncation ratio (steps 20–24) | 0.141 | 0.148 |
-| AIME 2024 accuracy (step 20)| 63.3% | 63.3% |
-| AIME 2025 accuracy (step 20) | 46.7% | 46.7% |
+| AIME 2024 accuracy (step 20)| 19/30 (63.3%) | 19/30 (63.3%) |
+| AIME 2025 accuracy (step 20) | 14/30 (46.7%) | 14/30 (46.7%) |
 | Mean eval truncation ratio (step 20) | 0.433 | 0.433 |
 | Mean gradient norm (steps 20–24) | 0.00997 | 0.00975 |
 | Mean train–rollout KL (steps 20–24) | 0.000625 | 0.000624 |
@@ -119,15 +120,15 @@ advantage for PoLoRA.
 | --- | ---: | ---: |
 | Mean rollout reward (steps 20–24) | 0.642 | 0.604 |
 | Mean rollout truncation ratio (steps 20–24) | 0.034 | 0.034 |
-| AIME 2024 accuracy (step 20) | 70.0% | 63.3% |
-| AIME 2025 accuracy (step 20) | 56.7% | 63.3% |
+| AIME 2024 accuracy (step 20) | 21/30 (70.0%) | 19/30 (63.3%) |
+| AIME 2025 accuracy (step 20) | 17/30 (56.7%) | 19/30 (63.3%) |
 | Mean eval truncation ratio (step 20) | 0.167 | 0.200 |
 | Mean gradient norm (steps 20–24) | 0.01188 | 0.01177 |
 | Mean train–rollout KL (steps 20–24) | 0.000572 | 0.000567 |
 
-AdamW has higher rollout reward and AIME 2024 accuracy, while PoLoRA performs
-better on AIME 2025. Their truncation ratios and optimization metrics remain
-similar, so the DAPO run shows no consistent advantage for either optimizer.
+AdamW performs better on AIME 2024, whereas PoLoRA performs better on AIME 2025. 
+Their truncation ratios and optimization metrics remain similar, providing no 
+consistent evidence that either optimizer has an advantage in the DAPO run.
 
 ## 4. Discussion
 
