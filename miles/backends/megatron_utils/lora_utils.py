@@ -209,10 +209,11 @@ def patch_param_grad_buffer_for_colocate_mode_lora() -> None:
     the distributed optimizer (``disable_param_buffers_cpu_backup and
     use_distributed_optimizer`` in param_and_grad_buffer.py), and only allocates
     ``param_data`` at all under the same flag, so a non-Adam optimizer leaves the
-    adapter params in "default". ``remap_adapter_params_to_param_buffer_region``
-    covers that case.
+    adapter params in "default". ``patch_adapter_region_for_colocate_mode_lora``
+    covers that case; ``setup_model_and_optimizer`` calls both under one guard.
 
-    The patch is idempotent and only takes effect once.
+    Call before any DDP wrap: Megatron constructs ``_ParamAndGradBuffer`` during the
+    wrap, so patching afterwards has no effect. Idempotent, and only takes effect once.
     """
     global _param_grad_buffer_patched
     if _param_grad_buffer_patched:
@@ -272,7 +273,7 @@ def _repack_params_into(flat: torch.Tensor, params: Sequence[torch.nn.Parameter]
         offset += param.numel()
 
 
-def remap_adapter_params_to_param_buffer_region(model: Sequence[torch.nn.Module]) -> None:
+def patch_adapter_region_for_colocate_mode_lora(model: Sequence[torch.nn.Module]) -> None:
     """Re-allocate the LoRA adapter params outside the region colocate offload pauses.
 
     Megatron only re-maps parameter storage when the distributed optimizer is on:
@@ -291,8 +292,10 @@ def remap_adapter_params_to_param_buffer_region(model: Sequence[torch.nn.Module]
     these runs have no way to do. ``--lora-train-only`` pauses every tag rather than
     just "default", so without the backup the adapters would resume as garbage.
 
-    Call once, after the DDP wrap: chunks Megatron already re-mapped are skipped,
-    but a second call on the remaining ones would allocate a second buffer.
+    Call once, after the DDP wrap (the paired
+    ``patch_param_grad_buffer_for_colocate_mode_lora`` runs before it): chunks Megatron
+    already re-mapped are skipped, but a second call on the remaining ones would
+    allocate a second buffer.
     """
     try:
         from torch_memory_saver import torch_memory_saver

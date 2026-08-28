@@ -1,5 +1,8 @@
-# PoLoRA vs AdamW — LoRA RL on Qwen3.5-4B
-
+---
+title: "PoLoRA vs AdamW — LoRA RL on Qwen3.5-4B"
+description: "A/B comparison of the PoLoRA and AdamW optimizers on one LoRA RL recipe: GRPO on DAPO-Math-17k, evaluated on AIME 2024 and AIME 2025."
+# Generated from examples/polora/README.md by scripts/tools/sync_example_docs.py. Edit that README, not this file.
+---
 A/B comparison of the two optimizers on the same LoRA RL recipe: GRPO on
 DAPO-Math-17k, evaluated on AIME 2024 and AIME 2025.
 
