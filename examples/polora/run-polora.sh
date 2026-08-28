@@ -7,7 +7,7 @@ USE_WANDB=1
 
 # 1 to log to wandb; needs WANDB_API_KEY in the environment. Keep this in step
 # with run-adamw.sh.
-USE_WANDB=${USE_WANDB:-0}
+USE_WANDB=${USE_WANDB:-1}
 
 GPU_IDS=4,5,6,7
 RAY_PORT_OFFSET=1
