@@ -6,12 +6,10 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." &>/dev/null && pwd)"
 
 # Paths
-HF_CHECKPOINT=${HF_CHECKPOINT:-/root/models/Qwen3.5-4B}
+HF_CHECKPOINT=${HF_CHECKPOINT:-/root/models/Qwen3-4B}
 TRAIN_DATA=${TRAIN_DATA:-/root/datasets/dapo-math-17k/dapo-math-17k.jsonl}
 EVAL_DATA_AIME24=${EVAL_DATA_AIME24:-/root/datasets/aime-2024/aime-2024.jsonl}
 EVAL_DATA_AIME25=${EVAL_DATA_AIME25:-/root/datasets/aime-2025/aime-2025.jsonl}
-
-# This path currently contains a Qwen3-4B checkpoint, not Qwen3.5-4B.
 MODEL_NAME=${MODEL_NAME:-qwen3-4B}
 
 # Cluster
