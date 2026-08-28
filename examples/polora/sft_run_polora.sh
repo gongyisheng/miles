@@ -16,9 +16,9 @@ OPTIMIZER_ARGS=(
    # Polora rescales each factor update to a spectral norm derived from lr, so
    # its lr lives on a different scale than adam's. Schedule shape is kept
    # identical to the adamw arm.
-   --lr 1e-3
+   --lr 2e-3
    --lr-decay-style cosine
-   --min-lr 1e-4
+   --min-lr 2e-4
    --lr-warmup-fraction 0.1
    --weight-decay 0.0
    --polora-beta1 0.9
