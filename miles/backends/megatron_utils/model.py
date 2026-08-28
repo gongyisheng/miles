@@ -50,7 +50,7 @@ from .ci_utils import (
     save_model_hashes,
 )
 from .initialize import is_first_replica_megatron_main_rank
-from .lora_utils import is_lora_enabled, is_lora_model
+from .lora_utils import is_lora_enabled, is_lora_model, remap_adapter_params_to_param_buffer_region
 from .model_provider import get_model_provider_func
 from .parallel import get_packed_seq_params
 
@@ -164,6 +164,11 @@ def setup_model_and_optimizer(
 
             provider_func = wrap_model_provider_with_inkling_lora(provider_func, args)
         model = get_model(provider_func, ModelType.encoder_or_decoder)
+
+    if is_lora_enabled(args) and getattr(args, "offload_train", False):
+        # Both build paths converge here, after DDP wrap, so this sees whatever
+        # Megatron did or did not re-map for itself.
+        remap_adapter_params_to_param_buffer_region(model)
 
     if args.debug_disable_optimizer:
         if is_first_replica_megatron_main_rank():

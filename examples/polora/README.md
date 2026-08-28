@@ -74,21 +74,22 @@ Within an arm the split is colocated: `--colocate` puts the sglang engines on
 the same 4 GPUs the actor trains on, so each role gets four devices instead of
 two. Disaggregating them left half the arm idle at any moment, which is what
 made it slow. `arguments.py` then defaults `--offload-train` and
-`--offload-rollout` on, so the rollout side swaps out of HBM between phases
-(`--offload-train` is turned back off below).
+`--offload-rollout` on, so the two swap in and out of HBM between phases and
+whichever side is running has the device nearly to itself. Both arms keep those
+defaults, so the two are configured identically.
 
-Both arms pass `--no-offload-train`, overriding the colocate default, because
-polora cannot offload — see the comment in `common.sh`: the trainer's
-`pause(tag="default")` unmaps the LoRA adapter params, since Megatron only
-re-maps them into the survivable `param_buffer` region when the distributed
-optimizer is on, and miles turns that off for every non-Adam optimizer. The
-first `update_weights` then dies with an illegal memory access. Keeping the
-adamw arm on the same setting leaves the two arms configured identically.
+`--offload-train` used to be unusable on the polora arm. `sleep()` pauses
+`tag="default"`, and Megatron only re-maps the LoRA adapter params into the
+survivable `param_buffer` region when the distributed optimizer is on — which
+miles turns off for every non-Adam optimizer — so the first `update_weights`,
+which runs while the trainer is paused, died with an illegal memory access.
+`remap_adapter_params_to_param_buffer_region` (`lora_utils.py`) now does that
+re-map for the non-Adam path, at the cost of keeping the adapter (~109 MiB here)
+resident and CPU-backed.
 
-The trainer therefore stays resident in HBM for the whole run on both arms, and
-both take `--sglang-mem-fraction-static 0.8`. Override with
-`SGLANG_MEM_FRACTION_STATIC` if the engines and the resident trainer do not fit
-together at that fraction.
+Both arms take `--sglang-mem-fraction-static 0.8`. Override with
+`SGLANG_MEM_FRACTION_STATIC` if the engines and the trainer do not fit together
+at that fraction.
 
 `--rollout-num-gpus` is not passed: `arguments.py` overrides it to
 `actor_num_gpus_per_node * actor_num_nodes` under colocate.

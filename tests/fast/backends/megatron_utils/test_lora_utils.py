@@ -5,13 +5,17 @@ exclude-module parsing, and LoRA sync config building — all without GPU.
 """
 
 from argparse import Namespace
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+import torch
 
 from miles.backends.megatron_utils.lora_utils import (
+    _adapter_param_groups,
     _get_lora_class_name,
     _is_adapter_param_name,
+    _repack_params_into,
     build_lora_sync_config,
     convert_target_modules_to_hf,
     convert_target_modules_to_megatron,
@@ -355,3 +359,93 @@ class TestBuildLoraSyncConfig:
 
 def test_lora_adapter_name_constant():
     assert LORA_ADAPTER_NAME == "miles_lora"
+
+
+# ---------------------------------------------------------------------------
+# Adapter param re-mapping out of the pausable memory-saver region
+# ---------------------------------------------------------------------------
+
+
+def _add_adapter(parent, name, dtype, in_shape=(2, 3), out_shape=(3, 2)):
+    """Attach a `<name>.adapter.linear_{in,out}.weight` pair, as megatron-bridge PEFT names them."""
+    wrapped = torch.nn.Module()
+    wrapped.weight = torch.nn.Parameter(torch.ones(2, 3, dtype=dtype))  # frozen base
+    adapter = torch.nn.Module()
+    for side, shape, value in (("linear_in", in_shape, 2.0), ("linear_out", out_shape, 3.0)):
+        leaf = torch.nn.Module()
+        leaf.weight = torch.nn.Parameter(torch.full(shape, value, dtype=dtype))
+        setattr(adapter, side, leaf)
+    wrapped.adapter = adapter
+    setattr(parent, name, wrapped)
+
+
+def _chunk_with_adapter(use_distributed_optimizer=None, dtype=torch.float32):
+    """A module shaped like a DDP-wrapped chunk: frozen base + two adapter params."""
+    chunk = torch.nn.Module()
+    chunk.decoder = torch.nn.Module()
+    _add_adapter(chunk.decoder, "linear_qkv", dtype)
+    if use_distributed_optimizer is not None:
+        chunk.ddp_config = SimpleNamespace(use_distributed_optimizer=use_distributed_optimizer)
+    return chunk
+
+
+class TestAdapterParamGroups:
+    def test_selects_only_adapter_params(self):
+        chunk = _chunk_with_adapter()
+        groups = _adapter_param_groups(chunk)
+
+        assert len(groups) == 1
+        [params] = groups.values()
+        assert {tuple(p.shape) for p in params} == {(2, 3), (3, 2)}
+        # The frozen base weight sits next to the adapter and must not be re-mapped.
+        assert all(p is not chunk.decoder.linear_qkv.weight for p in params)
+
+    def test_skipped_when_distributed_optimizer_already_remapped(self):
+        assert _adapter_param_groups(_chunk_with_adapter(use_distributed_optimizer=True)) == {}
+
+    def test_not_skipped_without_distributed_optimizer(self):
+        assert _adapter_param_groups(_chunk_with_adapter(use_distributed_optimizer=False)) != {}
+
+    def test_missing_ddp_config_is_treated_as_not_remapped(self):
+        # Anything not demonstrably re-mapped must be re-mapped, or it faults on pause.
+        assert _adapter_param_groups(_chunk_with_adapter()) != {}
+
+    def test_grouped_by_dtype(self):
+        chunk = _chunk_with_adapter(dtype=torch.float32)
+        _add_adapter(chunk.decoder, "linear_fc1", torch.bfloat16)
+
+        groups = _adapter_param_groups(chunk)
+        assert {dtype for dtype, _ in groups} == {torch.float32, torch.bfloat16}
+        assert all(len(params) == 2 for params in groups.values())
+
+
+class TestRepackParamsInto:
+    def test_values_preserved_and_storage_shared(self):
+        chunk = _chunk_with_adapter()
+        params = list(_adapter_param_groups(chunk).values())[0]
+        expected = [p.detach().clone() for p in params]
+
+        flat = torch.empty(sum(p.numel() for p in params))
+        _repack_params_into(flat, params)
+
+        for param, want in zip(params, expected, strict=True):
+            assert torch.equal(param.data, want)
+            assert param.shape == want.shape
+            assert param.requires_grad
+            assert param.data_ptr() >= flat.data_ptr()
+            assert param.data.untyped_storage().data_ptr() == flat.untyped_storage().data_ptr()
+
+    def test_already_registered_grad_hook_still_fires(self):
+        # Megatron's DDP registers its AccumulateGrad hooks during __init__, before
+        # this runs. set_data must not detach the param from them.
+        param = torch.nn.Parameter(torch.ones(2, 2))
+        fired = []
+        tmp = param.expand_as(param)
+        grad_acc = tmp.grad_fn.next_functions[0][0]
+        grad_acc.register_hook(lambda *_: fired.append(1))
+
+        _repack_params_into(torch.empty(4), [param])
+        (param * 2).sum().backward()
+
+        assert fired
+        assert torch.equal(param.grad, torch.full((2, 2), 2.0))

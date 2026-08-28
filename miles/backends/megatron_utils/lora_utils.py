@@ -200,9 +200,17 @@ def patch_param_grad_buffer_for_colocate_mode_lora() -> None:
     offloads default-region GPU memory.  During LoRA training, base weights are
     frozen (requires_grad=False) so DDP only creates buffers for adapter params.
 
-    This patch ensures those buffers are allocated in the "param_buffer" region
-    (enable_cpu_backup=False), making them invisible to pause(tag="default") —
-    eliminating the need for resume()/pause() around update_weights.
+    This patch ensures those buffers are allocated in the "grad_buffer" /
+    "param_buffer" regions (enable_cpu_backup=False), making them invisible to
+    pause(tag="default") — eliminating the need for resume()/pause() around
+    update_weights.
+
+    Only the grad half of that is unconditional. Megatron gates the param half on
+    the distributed optimizer (``disable_param_buffers_cpu_backup and
+    use_distributed_optimizer`` in param_and_grad_buffer.py), and only allocates
+    ``param_data`` at all under the same flag, so a non-Adam optimizer leaves the
+    adapter params in "default". ``remap_adapter_params_to_param_buffer_region``
+    covers that case.
 
     The patch is idempotent and only takes effect once.
     """
@@ -224,6 +232,96 @@ def patch_param_grad_buffer_for_colocate_mode_lora() -> None:
 
     _ParamAndGradBuffer.__init__ = _patched_init
     logger.info("Patched _ParamAndGradBuffer.__init__ for LoRA colocate mode (disable cpu backup)")
+
+
+# torch_memory_saver tag the colocate offload leaves mapped: sleep() pauses
+# tag="default" whenever the rollout side serves the adapter.
+_ADAPTER_PARAM_REGION_TAG = "param_buffer"
+
+
+def _adapter_param_groups(
+    model_chunk: torch.nn.Module,
+) -> dict[tuple[torch.dtype, torch.device], list[torch.nn.Parameter]]:
+    """Adapter params of one chunk grouped by (dtype, device).
+
+    Empty when Megatron's distributed optimizer already re-mapped this chunk's
+    params into its own ``param_data`` buffer.
+    """
+    ddp_config = getattr(model_chunk, "ddp_config", None)
+    if ddp_config is not None and ddp_config.use_distributed_optimizer:
+        return {}
+
+    groups: dict[tuple[torch.dtype, torch.device], list[torch.nn.Parameter]] = {}
+    for name, param in model_chunk.named_parameters():
+        if not _is_adapter_param_name(name):
+            continue
+        assert param.is_contiguous(), f"adapter param {name} is not contiguous; cannot re-map its storage"
+        groups.setdefault((param.dtype, param.device), []).append(param)
+    return groups
+
+
+def _repack_params_into(flat: torch.Tensor, params: Sequence[torch.nn.Parameter]) -> None:
+    """Copy ``params`` into ``flat`` and re-point each one at its slice."""
+    offset = 0
+    for param in params:
+        view = flat[offset : offset + param.numel()].view(param.shape)
+        view.copy_(param.data)
+        # set_data keeps the TensorImpl, so DDP's already-registered AccumulateGrad
+        # hooks and param.main_grad stay bound to this param.
+        param.data = view
+        offset += param.numel()
+
+
+def remap_adapter_params_to_param_buffer_region(model: Sequence[torch.nn.Module]) -> None:
+    """Re-allocate the LoRA adapter params outside the region colocate offload pauses.
+
+    Megatron only re-maps parameter storage when the distributed optimizer is on:
+    ``_ParamAndGradBuffer`` allocates ``param_data`` under ``if
+    self.ddp_config.use_distributed_optimizer``, and gates
+    ``disable_param_buffers_cpu_backup`` on the same flag. Every non-Adam optimizer
+    (polora, muon, multi-LoRA) turns the distributed optimizer off, which leaves the
+    adapter params in "default" — the region ``sleep()`` pauses. The adapter weight
+    sync then reads them off the live module while the trainer is paused (train.py
+    offloads before update_weights), and faults on unmapped memory.
+
+    Re-mapping them here reproduces for the non-Adam path what ``param_data`` does
+    for the Adam one. Unlike Megatron we keep the CPU backup on: Megatron can
+    discard ``param_data`` because the distributed optimizer all-gathers it back
+    from the fp32 master weights at the start of every step, which is exactly what
+    these runs have no way to do. ``--lora-train-only`` pauses every tag rather than
+    just "default", so without the backup the adapters would resume as garbage.
+
+    Call once, after the DDP wrap: chunks Megatron already re-mapped are skipped,
+    but a second call on the remaining ones would allocate a second buffer.
+    """
+    try:
+        from torch_memory_saver import torch_memory_saver
+    except ImportError:
+        logger.warning(
+            "torch_memory_saver is not installed; LoRA adapter params stay in the pausable "
+            "region and the adapter weight sync will fault under --offload-train."
+        )
+        return
+
+    total_bytes = 0
+    for model_chunk in model:
+        # One flat buffer per (dtype, device) rather than one per param: the region is
+        # a cuMem-backed MemPool, and an adapter is hundreds of small tensors.
+        for (dtype, device), params in _adapter_param_groups(model_chunk).items():
+            if device.type != "cuda":
+                continue
+            with torch_memory_saver.region(tag=_ADAPTER_PARAM_REGION_TAG, enable_cpu_backup=True):
+                flat = torch.empty(sum(p.numel() for p in params), dtype=dtype, device=device)
+            _repack_params_into(flat, params)
+            total_bytes += flat.numel() * flat.element_size()
+
+    if total_bytes:
+        logger.info(
+            "Re-mapped %.1f MiB of LoRA adapter params into the '%s' region "
+            "(no distributed optimizer to re-map them)",
+            total_bytes / 1024**2,
+            _ADAPTER_PARAM_REGION_TAG,
+        )
 
 
 # ---------------------------------------------------------------------------
