@@ -79,7 +79,7 @@ ROLLOUT_ARGS=(
    --num-rollout "${NUM_ROLLOUT:-5}"
    --rollout-batch-size 32
    --n-samples-per-prompt 8
-   --rollout-max-response-len 16384
+   --rollout-max-response-len 24576
    --rollout-temperature 1
 
    --global-batch-size 256
