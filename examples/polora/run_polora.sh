@@ -15,7 +15,7 @@ RAY_PORT_OFFSET=1
 OPTIMIZER_ARGS=(
    --optimizer polora
    # Polora rescales each factor update to a spectral norm derived from lr.
-   --lr 5e-4
+   --lr 2e-4
    --lr-decay-style constant
    --weight-decay 0.0
    --polora-beta1 0.9
