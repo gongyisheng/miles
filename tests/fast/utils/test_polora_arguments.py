@@ -31,6 +31,13 @@ class TestPoloraValidation:
     def test_other_optimizers_are_untouched(self, optimizer):
         _validate_polora_args(_args(optimizer=optimizer, lora_rank=0, tensor_model_parallel_size=8))
 
+    def test_missing_optimizer_attribute_is_not_a_polora_run(self):
+        # --optimizer is a Megatron argument: args assembled by the miles parser alone
+        # (as miles_validate_args' own tests do) simply do not have it.
+        args = _args(lora_rank=0, tensor_model_parallel_size=8)
+        del args.optimizer
+        _validate_polora_args(args)
+
     def test_requires_lora(self):
         with pytest.raises(AssertionError, match="lora-rank"):
             _validate_polora_args(_args(lora_rank=0))

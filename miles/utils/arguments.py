@@ -2885,7 +2885,10 @@ def _validate_rematerialize_param_from_master_weight(args):
 
 def _validate_polora_args(args):
     """Validate that each Polora step has complete, unsharded LoRA pairs."""
-    if (args.optimizer or "").lower() != "polora":
+    # --optimizer comes from Megatron's parser, not miles', so it is absent from any
+    # args built by the miles parser alone. The rest of this function may assume the
+    # Megatron args exist -- past this guard the run really is a polora run.
+    if (getattr(args, "optimizer", None) or "").lower() != "polora":
         return
     assert is_lora_enabled(args), (
         "--optimizer polora optimizes LoRA (A, B) adapter pairs and has nothing to step "
