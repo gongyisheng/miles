@@ -56,9 +56,13 @@ fi
 MODEL_ARGS_LINE="$(python3 "${REPO_ROOT}/miles/utils/external_utils/model_args_utils.py" "${MODEL_NAME}")" || exit 1
 read -ra MODEL_ARGS <<< "${MODEL_ARGS_LINE}"
 
+SAVE_DIR=${SAVE_DIR:-/root/shared_data/polora-vs-adamw/${RUN_TAG}}
+
 CKPT_ARGS=(
    --hf-checkpoint "${HF_CHECKPOINT}"
    --megatron-to-hf-mode bridge
+   --save "${SAVE_DIR}"
+   --save-interval "${SAVE_INTERVAL:-10}"
 )
 
 LORA_ARGS=(
