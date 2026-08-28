@@ -3,6 +3,7 @@
 
 RUN_TAG=adamw
 NUM_ROLLOUT=100
+USE_WANDB=1
 
 # 1 to log to wandb; needs credentials on the box (see common.sh). Keep this in
 # step with run-polora.sh.
