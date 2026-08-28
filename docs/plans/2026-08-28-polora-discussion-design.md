@@ -47,3 +47,12 @@ that the proposed mechanism has been directly measured.
 Review the completed section for consistency with the reported experiment,
 clear separation between evidence and hypothesis, correct optimizer
 terminology, and valid Markdown structure.
+
+## Simplification revision
+
+Condense the discussion to two short paragraphs. The first retains only the
+central contrast between stable pretraining/SFT gradients and noisy RL
+gradients, along with the risk that orthogonalization gives noisy directions
+too much influence. The second identifies larger-batch evaluation, potentially
+at 10 times the current batch size, explicitly as future work. Keep the existing
+limitations subsection unchanged.
