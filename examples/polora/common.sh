@@ -116,6 +116,13 @@ EVAL_ARGS=(
    --eval-top-k 1
 )
 
+# SKIP_EVAL_BEFORE_TRAIN=1 drops the step-0 eval that otherwise runs before the
+# first rollout. Handy for a smoke test; leave it off for a real comparison,
+# since the two arms lose their shared baseline point.
+if [[ "${SKIP_EVAL_BEFORE_TRAIN:-0}" == "1" ]]; then
+   EVAL_ARGS+=(--skip-eval-before-train)
+fi
+
 PERF_ARGS=(
    # Polora requires complete LoRA factors, so both arms use TP=PP=1.
    --tensor-model-parallel-size 1

@@ -46,7 +46,8 @@ drifts between arms invalidates the comparison.
 
 Overridable via environment: `HF_CHECKPOINT`, `TRAIN_DATA`, `EVAL_DATA_AIME24`,
 `EVAL_DATA_AIME25`, `MODEL_NAME`, `GPU_IDS`, `RAY_PORT_OFFSET`, `RAY_TEMP_DIR`,
-`MEGATRON_PATH`, `USE_WANDB`, `CLEANUP`.
+`MEGATRON_PATH`, `USE_WANDB`, `CLEANUP`, `NUM_ROLLOUT`,
+`SKIP_EVAL_BEFORE_TRAIN`.
 
 ## Requirements
 

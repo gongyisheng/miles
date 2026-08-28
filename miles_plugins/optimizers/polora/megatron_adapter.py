@@ -39,6 +39,14 @@ class PoloraMegatronOptimizer(MegatronOptimizer):
     def prepare_grads(self) -> bool:
         """Expose ``main_grad`` to Megatron's gradient statistics helpers."""
         for param in self.get_parameters():
+            # Under --accumulate-allreduce-grads-in-fp32 main_grad is fp32 while
+            # the LoRA factors stay bf16, and torch rejects a .grad whose dtype
+            # differs from its parameter's unless grad_dtype opts out. Opt out
+            # rather than casting: get_grad_norm/count_zeros read .grad, and
+            # narrowing the fp32 buffer to bf16 just to report on it would
+            # throw away the precision the flag was set to keep.
+            if getattr(param, "grad_dtype", None) is not None:
+                param.grad_dtype = None
             param.grad = param.main_grad
         return False
 

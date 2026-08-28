@@ -219,13 +219,13 @@ class TestCollectLoraPairsMegatron:
 
 
 class TestMegatronAdapter:
-    def _optimizer(self):
+    def _optimizer(self, dtype=torch.float32):
         pytest.importorskip("megatron.core.optimizer.optimizer")
         from megatron.core.optimizer import OptimizerConfig
 
         from miles_plugins.optimizers.polora.megatron_adapter import PoloraMegatronOptimizer
 
-        return PoloraMegatronOptimizer(Polora(pairs=_make_pairs()), OptimizerConfig())
+        return PoloraMegatronOptimizer(Polora(pairs=_make_pairs(dtype=dtype)), OptimizerConfig())
 
     def test_does_not_shadow_the_grad_stats_parallel_group(self):
         """An explicit None would reduce the gradient norm over WORLD."""
@@ -233,3 +233,21 @@ class TestMegatronAdapter:
 
     def test_loss_scale_is_one(self):
         assert self._optimizer().get_loss_scale().item() == 1.0
+
+    def test_prepare_grads_aliases_an_fp32_main_grad_onto_a_bf16_param(self):
+        """--accumulate-allreduce-grads-in-fp32 pairs bf16 factors with fp32 main_grad.
+
+        torch rejects a .grad whose dtype differs from its parameter's unless
+        grad_dtype opts out, and Megatron's grad-norm helpers read .grad.
+        """
+        optimizer = self._optimizer(dtype=torch.bfloat16)
+        params = optimizer.get_parameters()
+        for param in params:
+            param.main_grad = torch.ones(param.shape, dtype=torch.float32)
+
+        assert optimizer.prepare_grads() is False
+
+        for param in params:
+            assert param.dtype is torch.bfloat16
+            assert param.grad is param.main_grad
+            assert param.grad.dtype is torch.float32
