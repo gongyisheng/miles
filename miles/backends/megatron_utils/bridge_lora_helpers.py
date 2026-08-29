@@ -15,7 +15,7 @@ from megatron.core.utils import get_attr_wrapped_model
 from miles.utils.hf_config import load_hf_config
 from miles.utils.multi_lora import is_multi_lora_enabled, targets_expert_leaves
 
-from .lora_utils import convert_target_modules_to_hf, patch_param_grad_buffer_for_colocate_mode_lora
+from .lora_utils import convert_target_modules_to_hf
 
 logger = logging.getLogger(__name__)
 
@@ -191,19 +191,11 @@ def _setup_lora_model_via_bridge(args: Namespace) -> list:
         hidden_size = hf_config.text_config.hidden_size if hasattr(hf_config, "text_config") else hf_config.hidden_size
         provider.register_pre_wrap_hook(_make_value_model_hook(hidden_size, provider.sequence_parallel))
 
-    use_distributed_optimizer = "muon" not in (args.optimizer or "").lower()
-    if is_multi_lora_enabled(args):
-        # Per-slot LayerWise optimizers: plain DDP all-reduce keeps full grads on
-        # every rank (whole-param sharding + retained-gradient idempotency).
-        use_distributed_optimizer = False
     ddp_config = DistributedDataParallelConfig(
-        use_distributed_optimizer=use_distributed_optimizer,
+        use_distributed_optimizer=args.use_distributed_optimizer,
         grad_reduce_in_fp32=args.accumulate_allreduce_grads_in_fp32,
     )
     ddp_config.finalize()
-
-    if args.offload_train:
-        patch_param_grad_buffer_for_colocate_mode_lora()
 
     model = provider.provide_distributed_model(wrap_with_ddp=True, ddp_config=ddp_config)
     return model

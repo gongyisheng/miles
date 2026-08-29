@@ -15,8 +15,8 @@ def set_default_megatron_args(args):
             "--true-on-policy-mode is not supported on the megatron backend with this Megatron "
             "version; support lands in a follow-up PR. Use --train-backend fsdp for true-on-policy."
         )
-    # Muon currently owns its sharding path, and Megatron's distributed optimizer
-    # only supports Adam-family optimizers.
+    # Muon owns its sharding path and polora needs whole LoRA factor matrices;
+    # Megatron's distributed optimizer only supports Adam-family optimizers.
     args.use_distributed_optimizer = (args.optimizer is None or args.optimizer.lower() == "adam") and not getattr(
         args, "debug_disable_optimizer", False
     )

@@ -50,7 +50,12 @@ from .ci_utils import (
     save_model_hashes,
 )
 from .initialize import is_first_replica_megatron_main_rank
-from .lora_utils import is_lora_enabled, is_lora_model
+from .lora_utils import (
+    is_lora_enabled,
+    is_lora_model,
+    patch_adapter_region_for_colocate_mode_lora,
+    patch_param_grad_buffer_for_colocate_mode_lora,
+)
 from .model_provider import get_model_provider_func
 from .parallel import get_packed_seq_params
 
@@ -122,6 +127,10 @@ def _is_muon_optimizer(optimizer: str | None) -> bool:
     return optimizer is not None and "muon" in optimizer.lower()
 
 
+def _is_polora_optimizer(optimizer: str | None) -> bool:
+    return optimizer is not None and optimizer.lower() == "polora"
+
+
 def setup_model_and_optimizer(
     args: Namespace,
     role: str = "actor",
@@ -143,6 +152,10 @@ def setup_model_and_optimizer(
     assert not args.moe_use_upcycling
     assert args.load is not None or args.pretrained_checkpoint is not None
 
+    lora_offload = is_lora_enabled(args) and getattr(args, "offload_train", False)
+    if lora_offload:
+        patch_param_grad_buffer_for_colocate_mode_lora()
+
     # Multi-LoRA and single-LoRA (actor, bridge) both build via the bridge helper,
     # which picks the adapter type internally.
     if is_multi_lora_enabled(args) or (
@@ -160,6 +173,9 @@ def setup_model_and_optimizer(
 
             provider_func = wrap_model_provider_with_inkling_lora(provider_func, args)
         model = get_model(provider_func, ModelType.encoder_or_decoder)
+
+    if lora_offload:
+        patch_adapter_region_for_colocate_mode_lora(model)
 
     if args.debug_disable_optimizer:
         if is_first_replica_megatron_main_rank():
@@ -190,6 +206,10 @@ def setup_model_and_optimizer(
             use_gloo_process_groups=args.use_gloo_process_groups,
             layer_wise_distributed_optimizer="dist" in config.optimizer.lower(),
         )
+    elif _is_polora_optimizer(config.optimizer):
+        from miles_plugins.optimizers.polora.megatron_adapter import build_polora_optimizer
+
+        optimizer = build_polora_optimizer(args, config, model)
     elif is_multi_lora_enabled(args):
         from miles.backends.megatron_utils.multi_lora_optimizer import build_multi_lora_optimizer
 
