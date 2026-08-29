@@ -18,7 +18,7 @@ OPTIMIZER_ARGS=(
    # identical to the adamw arm.
    --lr 1e-2
    --lr-decay-style cosine
-   --min-lr 1e-2
+   --min-lr 1e-3
    --lr-warmup-fraction 0.1
    --weight-decay 0.0
    --polora-beta1 0.9
