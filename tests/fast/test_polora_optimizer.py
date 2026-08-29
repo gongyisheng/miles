@@ -77,9 +77,119 @@ class TestStatePrecision:
 
         original_state = source.state[pairs[0][0]]
         restored_state = restored.state[pairs[0][0]]
-        for key in ("M_A", "M_B", "Q", "P"):
+        for key in ("M_A", "M_B", "Q", "P", "W_A", "W_B"):
             assert restored_state[key].dtype is torch.float32, key
             torch.testing.assert_close(restored_state[key], original_state[key])
+
+
+class TestMasterWeights:
+    def test_masters_are_fp32_and_hold_more_than_the_bf16_params(self):
+        torch.manual_seed(0)
+        pairs = _make_pairs(dtype=torch.bfloat16)
+        _set_grads(pairs, attr="main_grad")
+        optimizer = Polora(pairs=pairs, lr=1e-2)
+        optimizer.step()
+
+        A, B = pairs[0]
+        state = optimizer.state[A]
+        assert state["W_A"].dtype is torch.float32
+        assert state["W_B"].dtype is torch.float32
+        # The parameter is the master rounded to bf16, and rounding lost something.
+        torch.testing.assert_close(A.detach(), state["W_A"].bfloat16(), rtol=0, atol=0)
+        torch.testing.assert_close(B.detach(), state["W_B"].bfloat16(), rtol=0, atol=0)
+        assert not torch.equal(state["W_A"], state["W_A"].bfloat16().float())
+
+    def test_bf16_params_follow_the_same_trajectory_as_fp32_params(self):
+        """The update is applied in fp32, so the parameter dtype must not steer it."""
+        torch.manual_seed(0)
+        bf16_pairs = _make_pairs(dtype=torch.bfloat16)
+        # Seed the fp32 run from the *rounded* weights so the only remaining
+        # difference between the runs would be bf16 arithmetic in the update.
+        fp32_pairs = [
+            (torch.nn.Parameter(A.detach().float()), torch.nn.Parameter(B.detach().float()))
+            for A, B in bf16_pairs
+        ]
+        bf16_opt = Polora(pairs=bf16_pairs, lr=1e-2)
+        fp32_opt = Polora(pairs=fp32_pairs, lr=1e-2)
+
+        for step in range(5):
+            _set_grads(bf16_pairs, attr="main_grad", seed=step)
+            _set_grads(fp32_pairs, attr="main_grad", seed=step)
+            bf16_opt.step()
+            fp32_opt.step()
+
+        for (A, B), (A32, B32) in zip(bf16_pairs, fp32_pairs, strict=True):
+            torch.testing.assert_close(bf16_opt.state[A]["W_A"], A32.detach(), rtol=0, atol=0)
+            torch.testing.assert_close(bf16_opt.state[A]["W_B"], B32.detach(), rtol=0, atol=0)
+
+    def test_sub_ulp_updates_accumulate_into_the_bf16_params(self):
+        """Steps smaller than a bf16 ULP must not round away step after step."""
+        torch.manual_seed(0)
+        pairs = _make_pairs(dtype=torch.bfloat16)
+        A = pairs[0][0]
+        before = A.detach().clone()
+        # lr is small enough that one step moves most of A by less than a bf16 ULP.
+        optimizer = Polora(pairs=pairs, lr=1e-5)
+
+        _set_grads(pairs, attr="main_grad", seed=0)
+        optimizer.step()
+        unchanged = (A.detach() == before).float().mean()
+        assert unchanged > 0.75, "the single-step update should be sub-ULP for most entries"
+        assert not torch.equal(optimizer.state[A]["W_A"], before.float()), "the master must still move"
+
+        # Repeating the same sub-ULP step accumulates in the master and eventually
+        # carries the bf16 parameter with it; without a master it would never move.
+        for _ in range(200):
+            _set_grads(pairs, attr="main_grad", seed=0)
+            optimizer.step()
+        assert (A.detach() == before).float().mean() < 0.1
+
+    def test_legacy_state_without_masters_seeds_them_from_the_params(self):
+        torch.manual_seed(0)
+        pairs = _make_pairs(dtype=torch.bfloat16)
+        _set_grads(pairs, attr="main_grad")
+        source = Polora(pairs=pairs, lr=1e-2)
+        source.step()
+        saved = source.state_dict()
+        for entry in saved["state"].values():
+            entry.pop("W_A", None)
+            entry.pop("W_B", None)
+
+        restored = Polora(pairs=pairs, lr=1e-2)
+        restored.load_state_dict(saved)
+        A, B = pairs[0]
+        assert "W_A" not in restored.state[A]
+
+        _set_grads(pairs, attr="main_grad")
+        restored.step()
+        state = restored.state[A]
+        assert state["W_A"].dtype is torch.float32
+        # Momentum survived the load rather than being reset alongside the masters.
+        torch.testing.assert_close(state["M_A"], source.state[A]["M_A"], rtol=1e-3, atol=0)
+
+    def test_sync_masters_from_params_picks_up_an_external_write(self):
+        torch.manual_seed(0)
+        pairs = _make_pairs(dtype=torch.bfloat16)
+        _set_grads(pairs, attr="main_grad")
+        optimizer = Polora(pairs=pairs, lr=1e-2)
+        optimizer.step()
+
+        A, B = pairs[0]
+        with torch.no_grad():
+            A.copy_(torch.full_like(A, 0.125))
+            B.copy_(torch.full_like(B, 0.25))
+        optimizer.sync_masters_from_params()
+
+        assert torch.equal(optimizer.state[A]["W_A"], A.detach().float())
+        assert torch.equal(optimizer.state[A]["W_B"], B.detach().float())
+
+    def test_sync_masters_is_a_noop_before_the_first_step(self):
+        pairs = _make_pairs(dtype=torch.bfloat16)
+        optimizer = Polora(pairs=pairs, lr=1e-2)
+
+        optimizer.sync_masters_from_params()
+
+        assert not optimizer.state[pairs[0][0]]
 
 
 class TestUpdate:

@@ -1,7 +1,8 @@
 """Adapt :class:`Polora` to Megatron's optimizer interface.
 
-LoRA factors remain bf16, optimizer state remains fp32, and gradients are not
-clipped because Polora rescales each update by its spectral norm.
+The module's LoRA factors remain bf16; the optimizer holds fp32 master copies
+of them plus fp32 state, and gradients are not clipped because Polora rescales
+each update by its spectral norm.
 """
 
 from __future__ import annotations
@@ -75,7 +76,15 @@ class PoloraMegatronOptimizer(MegatronOptimizer):
             param.grad = None
 
     def reload_model_params(self, state_dict=None):
-        """Do nothing because Polora has no master parameters."""
+        """Re-seed the fp32 masters after the model params were loaded into.
+
+        Megatron calls this once the base checkpoint has been read into the live
+        model. Polora's masters are the weights it updates, so a load that
+        rewrites the factors has to be mirrored into them; masters not allocated
+        yet (the usual case here, since nothing has stepped) seed from the params
+        on the first step.
+        """
+        self.optimizer.sync_masters_from_params()
 
     def state_dict(self):
         return {"optimizer": self.optimizer.state_dict()}

@@ -242,11 +242,22 @@ def check_discovery(mine, up, device) -> None:
 
 
 def check_trajectory(mine, up, device, dtype, steps, grad_source, seed=0) -> None:
-    """Run both optimizers on identical gradients."""
+    """Run both optimizers on identical gradients.
+
+    Under bf16 the two are *meant* to differ: upstream adds each update straight
+    into the bf16 factor, while miles keeps fp32 masters, updates those, and casts
+    the result back into the parameter. The reference for the miles masters is
+    therefore upstream running the same recipe in fp32 from the same (bf16-rounded)
+    initial weights and gradients -- which it must still match bit for bit.
+    """
     label = f"{device}/{dtype_name(dtype)}/grads-via-{grad_source}"
     print(f"\n== optimizer trajectory: {label} ({steps} steps) ==")
     shapes = [(8, 64, 32), (8, 64, 32), (4, 32, 96), (16, 128, 128)]
     peft, bridge = build_models(shapes, dtype, device, seed=seed)
+    masters = dtype is not torch.float32
+    if masters:
+        # Exact widening of the same weights: the runs still start from one point.
+        peft.float()
 
     up_pairs = up.collect_lora_pairs(peft)
     mine_pairs = mine.collect_lora_pairs(bridge)
@@ -255,12 +266,19 @@ def check_trajectory(mine, up, device, dtype, steps, grad_source, seed=0) -> Non
     opt_up = up.Polora(pairs=up_pairs, **kwargs)
     opt_mine = mine.Polora(pairs=mine_pairs, **kwargs)
 
+    def mine_weights(i, A_m):
+        """The weights miles actually updates: masters once they exist."""
+        st = opt_mine.state[A_m]
+        A_w, B_w = mine_pairs[i]
+        return (st["W_A"], st["W_B"]) if "W_A" in st else (A_w, B_w)
+
     init_w = [(A.detach().clone(), B.detach().clone()) for A, B in mine_pairs]
     worst = 0.0
+    worst_round = 0.0
     for step in range(steps):
         grads = make_grads(up_pairs, dtype, device, seed=1000 + step)
         for (A_u, B_u), (A_m, B_m), (gA, gB) in zip(up_pairs, mine_pairs, grads, strict=True):
-            A_u.grad, B_u.grad = gA.clone(), gB.clone()
+            A_u.grad, B_u.grad = gA.to(A_u.dtype), gB.to(B_u.dtype)
             if grad_source == "main_grad":
                 A_m.main_grad, B_m.main_grad = gA.clone(), gB.clone()
                 A_m.grad = B_m.grad = None
@@ -271,10 +289,14 @@ def check_trajectory(mine, up, device, dtype, steps, grad_source, seed=0) -> Non
         opt_mine.step()
 
         for i, ((A_u, B_u), (A_m, B_m)) in enumerate(zip(up_pairs, mine_pairs, strict=True)):
-            for nm, t_m, t_u in (("A", A_m, A_u), ("B", B_m, B_u)):
+            W_A, W_B = mine_weights(i, A_m)
+            for nm, t_m, t_u in (("A", W_A, A_u), ("B", W_B, B_u)):
                 worst = max(worst, rel_diff(t_m, t_u)[0])
                 if step == steps - 1:
                     report(f"step {step + 1} pair{i} {nm} weight", t_m, t_u)
+            if masters:
+                # The parameter is the master rounded down to its own dtype.
+                worst_round = max(worst_round, rel_diff(A_m, W_A.to(dtype))[0], rel_diff(B_m, W_B.to(dtype))[0])
 
         if step == steps - 1:
             for i, ((A_u, _), (A_m, _)) in enumerate(zip(up_pairs, mine_pairs, strict=True)):
@@ -282,7 +304,14 @@ def check_trajectory(mine, up, device, dtype, steps, grad_source, seed=0) -> Non
                 for key in ("M_A", "M_B", "Q", "P"):
                     report(f"step {step + 1} pair{i} state[{key}]", sm[key], su[key])
 
-    report_bool(f"trajectory {label}: worst weight deviation over all steps", worst == 0.0, f"max_abs={worst:.3e}")
+    weights = "master weights" if masters else "weights"
+    report_bool(f"trajectory {label}: worst {weights} deviation over all steps", worst == 0.0, f"max_abs={worst:.3e}")
+    if masters:
+        report_bool(
+            f"trajectory {label}: params are exactly the masters cast to {dtype_name(dtype)}",
+            worst_round == 0.0,
+            f"max_abs={worst_round:.3e}",
+        )
 
     moves = [max(rel_diff(A, A0)[0], rel_diff(B, B0)[0]) for (A, B), (A0, B0) in zip(mine_pairs, init_w, strict=True)]
     report_bool(

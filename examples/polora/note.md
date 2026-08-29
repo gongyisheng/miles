@@ -138,3 +138,12 @@ actually on disk. Once a genuine Qwen3.5-4B checkpoint is downloaded, run with
   `--use-precision-aware-optimizer` (see `_validate_polora_args` in
   `miles/utils/arguments.py`). The distributed optimizer is disabled
   automatically for polora runs.
+- polora holds its own fp32 master copy of every LoRA factor, applies the update
+  there, and casts back into the bf16 parameter. It has to: `rho` puts the
+  per-entry step around 1e-5 against entries of `A` around 1.5e-2, which is
+  under bf16's resolution, so updates added straight to the bf16 factor largely
+  round away (over 200 fixed-direction steps, a bf16 `A` moved less than half as
+  far as the same run in fp32). The masters ride in `optimizer.state_dict()`, so
+  the per-rank `training_state_rank*.pt` beside each adapter checkpoint carries
+  them; an adapter checkpoint written before this existed still resumes, seeding
+  its masters from the saved bf16 factors.

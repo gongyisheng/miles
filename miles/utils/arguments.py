@@ -2913,8 +2913,9 @@ def _validate_polora_args(args):
         "gradient clipping polora deliberately skips)"
     )
     assert not args.optimizer_cpu_offload, (
-        "--optimizer polora does not support --optimizer-cpu-offload: it keeps no master params "
-        "for the offloader to hold"
+        "--optimizer polora does not support --optimizer-cpu-offload: the offloader moves "
+        "Megatron's own master-param groups, which polora does not build -- its fp32 master "
+        "copies of the LoRA factors live in its own optimizer state"
     )
     assert not args.use_precision_aware_optimizer, (
         "--optimizer polora does not support --use-precision-aware-optimizer: its state dtypes " "are fixed at fp32"

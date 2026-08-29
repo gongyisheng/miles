@@ -1,7 +1,18 @@
 """Polora optimizer adapted for Megatron LoRA training.
 
 The update follows https://github.com/nikhilgsh/polora. This version supports
-Megatron-Bridge adapters and ``main_grad``, and stores optimizer state in fp32.
+Megatron-Bridge adapters and ``main_grad``, and stores optimizer state in fp32,
+including an fp32 master copy of every LoRA factor.
+
+Master weights are not an optional refinement here. Polora rescales each factor
+update to spectral norm ``rho = lr / (sigma_max(A) + sigma_max(B))``, so with
+lr=5e-4 and a rank-32 adapter the per-entry step lands around 1e-5 while the
+entries of ``A`` sit around 1.5e-2 -- a relative step of ~5e-4, well under
+bf16's ~4e-3 resolution. Added straight to a bf16 factor, most of that update
+rounds away: over 200 steps of a fixed gradient direction, a bf16 ``A`` travels
+less than half as far as the same run in fp32. The optimizer therefore owns
+fp32 masters, applies the update there, and casts back into the (bf16) module
+parameter, which stays the tensor the forward pass and the weight sync read.
 """
 
 from __future__ import annotations
@@ -52,6 +63,10 @@ class Polora(Optimizer):
 
     Each LoRA pair is whitened in a diagonal-Kronecker curvature metric, passed
     through the matrix sign, unwhitened, and rescaled to spectral norm ``rho``.
+
+    The update is applied to fp32 master copies of the factors (``W_A``/``W_B``
+    in the per-pair state) and then cast into the module parameters, so bf16
+    rounding never eats the step. The masters ride along in ``state_dict()``.
 
     Args:
         model: Megatron model chunk(s). Provide either ``model`` or ``pairs``.
@@ -114,7 +129,28 @@ class Polora(Optimizer):
             st["M_B"] = torch.zeros_like(B, dtype=torch.float32)
             st["Q"] = torch.full((A.shape[1],), self.epsilon, dtype=torch.float32, device=A.device)
             st["P"] = torch.full((B.shape[0],), self.epsilon, dtype=torch.float32, device=B.device)
+        # Seeded separately from the block above so a checkpoint written before
+        # masters existed resumes by seeding them from the saved bf16 factors
+        # rather than losing its momentum and curvature.
+        if "W_A" not in st:
+            st["W_A"] = A.detach().float().clone()
+            st["W_B"] = B.detach().float().clone()
         return st
+
+    @torch.no_grad()
+    def sync_masters_from_params(self):
+        """Re-seed the fp32 masters from the module parameters.
+
+        Call after anything writes the factors behind the optimizer's back (a
+        checkpoint load into the live model, for instance). Pairs whose masters
+        have not been allocated yet are left alone: they seed from the params on
+        the next step anyway.
+        """
+        for A, B in self.pairs:
+            st = self.state.get(A)
+            if st and "W_A" in st:
+                st["W_A"].copy_(A.detach().float())
+                st["W_B"].copy_(B.detach().float())
 
     def load_state_dict(self, state_dict):
         """Restore state without torch downcasting it to the parameter dtype."""
@@ -203,8 +239,10 @@ class Polora(Optimizer):
         for idxs in groups.values():
             G_A = torch.stack([_grad_of(pairs[i][0]).float() for i in idxs])
             G_B = torch.stack([_grad_of(pairs[i][1]).float() for i in idxs])
-            Aw = torch.stack([pairs[i][0].detach().float() for i in idxs])
-            Bw = torch.stack([pairs[i][1].detach().float() for i in idxs])
+            # The masters, not the (bf16) parameters, are the weights Polora
+            # differentiates around: the parameters are a rounded view of them.
+            Aw = torch.stack([S[i]["W_A"] for i in idxs])
+            Bw = torch.stack([S[i]["W_B"] for i in idxs])
             M_A = torch.stack([S[i]["M_A"] for i in idxs]).mul_(b1).add_(G_A, alpha=1.0 - b1)
             M_B = torch.stack([S[i]["M_B"] for i in idxs]).mul_(b1).add_(G_B, alpha=1.0 - b1)
             Q = torch.stack([S[i]["Q"] for i in idxs])
@@ -253,8 +291,13 @@ class Polora(Optimizer):
 
             for j, i in enumerate(idxs):
                 A_, B_ = pairs[i]
-                A_.add_(dA[j].to(dtype=A_.dtype, device=A_.device))
-                B_.add_(dB[j].to(dtype=B_.dtype, device=B_.device))
+                W_A, W_B = S[i]["W_A"], S[i]["W_B"]
+                W_A.add_(dA[j])
+                W_B.add_(dB[j])
+                # copy_ casts, and writes through the flat-buffer view Megatron
+                # may have re-mapped the parameter onto.
+                A_.copy_(W_A)
+                B_.copy_(W_B)
                 S[i]["M_A"].copy_(M_A[j])
                 S[i]["M_B"].copy_(M_B[j])
                 S[i]["Q"].copy_(Q[j])
