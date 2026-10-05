@@ -663,6 +663,66 @@ class _RecordingTransport(httpx.AsyncBaseTransport):
         return httpx.Response(200)
 
 
+class TestGetWithRetry:
+    @pytest.mark.parametrize("failure", ["transport", "status"])
+    async def test_recovers_after_two_failures(self, monkeypatch, failure):
+        attempts = 0
+        delays = []
+
+        def handle(request):
+            nonlocal attempts
+            attempts += 1
+            assert request.method == "GET"
+            assert request.content == b""
+            if attempts < 3:
+                if failure == "transport":
+                    raise httpx.ReadError("connection reset", request=request)
+                return httpx.Response(503, text="unavailable")
+            return httpx.Response(200, json={"workers": []})
+
+        async def sleep(delay):
+            delays.append(delay)
+
+        monkeypatch.setattr(http_utils.asyncio, "sleep", sleep)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+            monkeypatch.setattr(http_utils, "_http_client", client)
+            assert await http_utils.get("http://router/list_workers") == {"workers": []}
+
+        assert attempts == 3
+        assert delays == [1, 1]
+
+    @pytest.mark.parametrize("failure", ["transport", "status"])
+    async def test_raises_after_three_failures(self, monkeypatch, failure):
+        attempts = 0
+        delays = []
+
+        def handle(request):
+            nonlocal attempts
+            attempts += 1
+            if failure == "transport":
+                raise httpx.ReadError("connection reset", request=request)
+            return httpx.Response(503, text="unavailable")
+
+        async def sleep(delay):
+            delays.append(delay)
+
+        monkeypatch.setattr(http_utils.asyncio, "sleep", sleep)
+        error = httpx.ReadError if failure == "transport" else httpx.HTTPStatusError
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+            monkeypatch.setattr(http_utils, "_http_client", client)
+            with pytest.raises(error):
+                await http_utils.get("http://router/list_workers")
+
+        assert attempts == 3
+        assert delays == [1, 1]
+
+    async def test_returns_text_when_response_is_not_json(self, monkeypatch):
+        transport = httpx.MockTransport(lambda request: httpx.Response(200, text="ready"))
+        async with httpx.AsyncClient(transport=transport) as client:
+            monkeypatch.setattr(http_utils, "_http_client", client)
+            assert await http_utils.get("http://router/health") == "ready"
+
+
 class TestDistributedPostActors:
     def test_the_poster_actor_is_constructed_with_keyword_arguments(self, monkeypatch):
         """A positional handoff silently binds to the wrong parameter once the actor grows another one."""

@@ -212,7 +212,7 @@ def _next_actor():
     return actor
 
 
-async def _post(client, url, payload, max_retries=60, action="post", headers=None):
+async def _request_with_retry(client, url, payload, max_retries=60, action="post", headers=None):
     retry_count = 0
     while retry_count < max_retries:
         try:
@@ -334,7 +334,7 @@ def _init_ray_distributed_post(args):
             )
 
         async def do_post(self, url, payload, max_retries=60, action="post", headers=None):
-            return await _post(self._client, url, payload, max_retries, action=action, headers=headers)
+            return await _request_with_retry(self._client, url, payload, max_retries, action=action, headers=headers)
 
     # Create actors per node
     created = []
@@ -370,29 +370,9 @@ async def post(url, payload, max_retries=60, action="post", headers=None):
             logger.info(f"[http_utils] Distributed POST failed, falling back to local: {e} (url={url})")
             # fall through to local
 
-    return await _post(_http_client, url, payload, max_retries, action=action, headers=headers)
+    return await _request_with_retry(_http_client, url, payload, max_retries, action=action, headers=headers)
 
 
 async def get(url):
-    """Fetch JSON with at most three attempts for transient transport failures."""
-    max_attempts = 3
-    for attempt in range(1, max_attempts + 1):
-        try:
-            response = await _http_client.get(url)
-            break
-        except (httpx.NetworkError, httpx.TimeoutException, httpx.RemoteProtocolError) as exc:
-            if attempt == max_attempts:
-                raise
-            logger.warning(
-                "GET %s failed (%s: %s), retrying... (attempt %d/%d)",
-                url,
-                type(exc).__name__,
-                exc,
-                attempt,
-                max_attempts,
-            )
-            await asyncio.sleep(1)
-
-    response.raise_for_status()
-    output = response.json()
-    return output
+    """Fetch JSON or text with at most three attempts."""
+    return await _request_with_retry(_http_client, url, payload=None, max_retries=3, action="get")
