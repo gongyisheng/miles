@@ -23,16 +23,18 @@ This lets us simulate 20 seconds of polling in <1ms of real time.
 
 import asyncio
 import inspect
+import json
 import multiprocessing
 import socket
 import subprocess
 import sys
 import threading
 import time
+from contextlib import nullcontext
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 from typing import Any, NamedTuple
-from unittest.mock import patch
+from unittest.mock import AsyncMock, Mock, call, patch
 
 import httpx
 import pytest
@@ -663,64 +665,43 @@ class _RecordingTransport(httpx.AsyncBaseTransport):
         return httpx.Response(200)
 
 
-class TestGetWithRetry:
+@pytest.mark.parametrize(
+    "method, kwargs",
+    [
+        pytest.param("get", {}, id="GET"),
+        pytest.param("post", {"payload": {"prompt": "hello"}, "max_retries": 3}, id="POST"),
+    ],
+)
+class TestRequestWithRetry:
     @pytest.mark.parametrize("failure", ["transport", "status"])
-    async def test_recovers_after_two_failures(self, monkeypatch, failure):
-        attempts = 0
-        delays = []
-
-        def handle(request):
-            nonlocal attempts
-            attempts += 1
-            assert request.method == "GET"
-            assert request.content == b""
-            if attempts < 3:
-                if failure == "transport":
-                    raise httpx.ReadError("connection reset", request=request)
-                return httpx.Response(503, text="unavailable")
-            return httpx.Response(200, json={"workers": []})
-
-        async def sleep(delay):
-            delays.append(delay)
-
-        monkeypatch.setattr(http_utils.asyncio, "sleep", sleep)
-        async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
-            monkeypatch.setattr(http_utils, "_http_client", client)
-            assert await http_utils.get("http://router/list_workers") == {"workers": []}
-
-        assert attempts == 3
-        assert delays == [1, 1]
-
-    @pytest.mark.parametrize("failure", ["transport", "status"])
-    async def test_raises_after_three_failures(self, monkeypatch, failure):
-        attempts = 0
-        delays = []
-
-        def handle(request):
-            nonlocal attempts
-            attempts += 1
-            if failure == "transport":
-                raise httpx.ReadError("connection reset", request=request)
-            return httpx.Response(503, text="unavailable")
-
-        async def sleep(delay):
-            delays.append(delay)
-
-        monkeypatch.setattr(http_utils.asyncio, "sleep", sleep)
+    @pytest.mark.parametrize("num_failures", [2, 3], ids=["recovers", "exhausts"])
+    async def test_retries(self, monkeypatch, method, kwargs, failure, num_failures):
         error = httpx.ReadError if failure == "transport" else httpx.HTTPStatusError
+        failed = (
+            httpx.ReadError("connection reset") if failure == "transport" else httpx.Response(503, text="unavailable")
+        )
+        handle = Mock(side_effect=[failed] * num_failures + [httpx.Response(200, json={"workers": []})])
+        sleep = AsyncMock()
+        monkeypatch.setattr(http_utils.asyncio, "sleep", sleep)
+        monkeypatch.setattr(http_utils, "_distributed_post_enabled", False)
         async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
             monkeypatch.setattr(http_utils, "_http_client", client)
-            with pytest.raises(error):
-                await http_utils.get("http://router/list_workers")
+            with pytest.raises(error) if num_failures == 3 else nullcontext():
+                assert await getattr(http_utils, method)("http://router/list_workers", **kwargs) == {"workers": []}
 
-        assert attempts == 3
-        assert delays == [1, 1]
+        assert handle.call_count == 3
+        assert sleep.await_args_list == [call(1), call(1)]
+        for request_call in handle.call_args_list:
+            request = request_call.args[0]
+            assert request.method == method.upper()
+            assert (json.loads(request.content) if request.content else None) == kwargs.get("payload")
 
-    async def test_returns_text_when_response_is_not_json(self, monkeypatch):
+    async def test_returns_text_when_response_is_not_json(self, monkeypatch, method, kwargs):
         transport = httpx.MockTransport(lambda request: httpx.Response(200, text="ready"))
+        monkeypatch.setattr(http_utils, "_distributed_post_enabled", False)
         async with httpx.AsyncClient(transport=transport) as client:
             monkeypatch.setattr(http_utils, "_http_client", client)
-            assert await http_utils.get("http://router/health") == "ready"
+            assert await getattr(http_utils, method)("http://router/health", **kwargs) == "ready"
 
 
 class TestDistributedPostActors:
