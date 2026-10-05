@@ -373,9 +373,26 @@ async def post(url, payload, max_retries=60, action="post", headers=None):
     return await _post(_http_client, url, payload, max_retries, action=action, headers=headers)
 
 
-# TODO unify w/ `post` to add retries and remote-execution
 async def get(url):
-    response = await _http_client.get(url)
+    """Fetch JSON with at most three attempts for transient transport failures."""
+    max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = await _http_client.get(url)
+            break
+        except (httpx.NetworkError, httpx.TimeoutException, httpx.RemoteProtocolError) as exc:
+            if attempt == max_attempts:
+                raise
+            logger.warning(
+                "GET %s failed (%s: %s), retrying... (attempt %d/%d)",
+                url,
+                type(exc).__name__,
+                exc,
+                attempt,
+                max_attempts,
+            )
+            await asyncio.sleep(1)
+
     response.raise_for_status()
     output = response.json()
     return output
